@@ -186,8 +186,8 @@ func registration(cfg config.Config) any {
 	}{
 		pluginabi.SchemaVersion,
 		pluginapi.Metadata{
-			Name: config.PluginID, Version: Version, Author: "kpatdev (fork of Shreyash/webdevcaptain's quota-reset-router)",
-			GitHubRepository: "https://github.com/kpatdev/quota-router", ConfigFields: fields,
+			Name: config.PluginID, Version: Version, Author: "Codedaptive (based on kpatdev and Shreyash/webdevcaptain quota routers)",
+			GitHubRepository: "https://github.com/codedaptive/quota-router", ConfigFields: fields,
 		},
 		map[string]any{
 			"model_router": true, "model_registrar": true, "executor": true, "executor_model_scope": "static",

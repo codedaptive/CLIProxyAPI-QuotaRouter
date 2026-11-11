@@ -285,6 +285,12 @@ def main():
             reg = call(method, payload)
             assert reg["schema_version"] == 6
             assert reg["capabilities"] == {
+                "model_router": True,
+                "model_registrar": True,
+                "executor": True,
+                "executor_model_scope": "static",
+                "executor_input_formats": ["claude", "openai", "openai-response"],
+                "executor_output_formats": ["claude", "openai", "openai-response"],
                 "scheduler": True,
                 "scheduler_across_priorities": True,
                 "usage_plugin": True,
