@@ -1,4 +1,4 @@
-IMAGE := golang:1.26-bookworm@sha256:a688600ca24f8a4d3ca77f95b0dd40704a9fc787c826660eb7ba0b641b8b175d
+IMAGE := golang:1.26.10-bookworm@sha256:5de7c99eb78ca5e515a4c340235d0955ec5964a5071c492c15503d7c267da473
 GO_VERSION := 1.26.10
 # SHA-256 of https://go.dev/dl/go$(GO_VERSION).src.tar.gz, the source of the patched darwin_amd64 toolchain.
 GO_SRC_SHA256 := fd63e883ba2f2bfca93c1646b31ebef63e2b1e4d2b317c9789d976a68d81f36f
