@@ -15,6 +15,7 @@ import (
 	"github.com/kpatdev/quota-router/internal/config"
 	"github.com/kpatdev/quota-router/internal/mgmt"
 	"github.com/kpatdev/quota-router/internal/quota"
+	"github.com/kpatdev/quota-router/internal/roles"
 	"github.com/kpatdev/quota-router/internal/router"
 	"github.com/kpatdev/quota-router/internal/session"
 	"github.com/kpatdev/quota-router/internal/store"
@@ -24,7 +25,7 @@ import (
 )
 
 // Version is the plugin release version.
-const Version = "1.1.0"
+const Version = "1.1.0-minillm.5"
 
 const (
 	rosterEvery    = 30 * time.Second
@@ -52,6 +53,7 @@ type Runtime struct {
 	mu          sync.Mutex
 	cfg         config.Config
 	router      *router.Router
+	roles       *roles.Engine
 	tel         *telemetry.Recorder
 	store       *store.Store
 	loadRes     string
@@ -106,6 +108,8 @@ func (p *Runtime) Handle(method string, raw []byte) (out []byte) {
 		}
 	}()
 	switch method {
+	case pluginabi.MethodModelRoute, pluginabi.MethodModelRegister, pluginabi.MethodExecutorIdentifier, pluginabi.MethodExecutorExecute, pluginabi.MethodExecutorExecuteStream, pluginabi.MethodExecutorCountTokens:
+		return p.handleRoles(method, raw)
 	case pluginabi.MethodPluginRegister, pluginabi.MethodPluginReconfigure:
 		var req struct {
 			ConfigYAML []byte `json:"config_yaml"`
@@ -178,14 +182,16 @@ func registration(cfg config.Config) any {
 	return struct {
 		SchemaVersion uint32             `json:"schema_version"`
 		Metadata      pluginapi.Metadata `json:"metadata"`
-		Capabilities  map[string]bool    `json:"capabilities"`
+		Capabilities  map[string]any     `json:"capabilities"`
 	}{
 		pluginabi.SchemaVersion,
 		pluginapi.Metadata{
 			Name: config.PluginID, Version: Version, Author: "kpatdev (fork of Shreyash/webdevcaptain's quota-reset-router)",
 			GitHubRepository: "https://github.com/kpatdev/quota-router", ConfigFields: fields,
 		},
-		map[string]bool{
+		map[string]any{
+			"model_router": true, "model_registrar": true, "executor": true, "executor_model_scope": "static",
+			"executor_input_formats": []string{"claude", "openai", "openai-response"}, "executor_output_formats": []string{"claude", "openai", "openai-response"},
 			"scheduler":                   true,
 			"scheduler_across_priorities": cfg.ScheduleAcrossPriorities,
 			"usage_plugin":                true,
@@ -217,6 +223,12 @@ func (p *Runtime) Configure(cfg config.Config) {
 		p.router.Configure(cfg)
 		p.tel.SetRetention(cfg.HistoryRetention)
 	}
+	if p.roles == nil {
+		host, _ := p.Host.(roles.Host)
+		p.roles = &roles.Engine{Host: host, Eligibility: p.router, Now: p.now}
+		p.server.RoleStatus = p.roles.Decisions
+	}
+	p.roles.Configure(cfg.Roles, cfg.Mode == config.ModeActive)
 	p.cfg = cfg
 	if p.cancel == nil {
 		p.startLocked()
@@ -531,16 +543,46 @@ func (p *Runtime) info() mgmt.RuntimeInfo {
 
 // Pick answers scheduler.pick.
 func (p *Runtime) Pick(req pluginapi.SchedulerPickRequest) pluginapi.SchedulerPickResponse {
-	r := p.routerOrNil()
+	p.mu.Lock()
+	roleEngine := p.roles
+	r := p.router
+	p.mu.Unlock()
+	// Filter role callbacks too: they execute before the ordinary scheduler.
+	originalReq := req
+	if r != nil {
+		candidates := make([]pluginapi.SchedulerAuthCandidate, 0, len(req.Candidates))
+		for _, c := range req.Candidates {
+			if !r.ReserveBlocked(c.ID, c.Provider) {
+				candidates = append(candidates, c)
+			}
+		}
+		req.Candidates = candidates
+	}
+	if roleEngine != nil && !p.quiesced.Load() {
+		if picked, handled := roleEngine.CountPick(req); handled {
+			return picked
+		}
+	}
+	if pinned, _ := req.Options.Metadata["pinned_auth_id"].(string); pinned != "" && strings.HasPrefix(http.Header(req.Options.Headers).Get("X-Claude-Code-Session-Id"), roles.SessionPrefix) {
+		for _, candidate := range req.Candidates {
+			if candidate.ID == pinned {
+				return pluginapi.SchedulerPickResponse{Handled: true, AuthID: pinned}
+			}
+		}
+		return pluginapi.SchedulerPickResponse{Handled: true, Reject: true, RejectReason: "Role account is unavailable"}
+	}
 	if r == nil || p.quiesced.Load() {
 		return pluginapi.SchedulerPickResponse{}
 	}
-	d := r.Pick(toPickRequest(req))
+	d := r.Pick(toPickRequest(originalReq))
 	if d.Provider == "claude" || d.Provider == "codex" {
 		p.tel.Decision(d.At, d.Provider, d.AuthID, d.Outcome)
 	}
 	if !d.Applied {
 		return pluginapi.SchedulerPickResponse{}
+	}
+	if d.Reject {
+		return pluginapi.SchedulerPickResponse{Handled: true, Reject: true, RejectCode: "weekly_reserve_protected", RejectReason: "Claude Ultra (formerly Max) weekly reserve is protected; no eligible account can be selected"}
 	}
 	return pluginapi.SchedulerPickResponse{AuthID: d.AuthID, Handled: true}
 }
@@ -592,6 +634,9 @@ func (p *Runtime) Usage(rec pluginapi.UsageRecord) {
 		o.Status = http.StatusOK
 	}
 	o.Session, o.HasSession = session.FromUsage(rec.SessionID, rec.ParentSessionID, rec.APIKey)
+	if roles.IsRoleSession(rec.SessionID) {
+		o.HasSession = false
+	}
 	r.Observe(o)
 	p.wakePoller()
 	d := rec.Detail

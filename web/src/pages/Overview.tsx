@@ -37,8 +37,8 @@ export function OverviewPage({ overview, reloadOverview, provider, search, now }
     <>
       <Stats ov={ov} now={now} />
       <section className="split" aria-label="Next account for a new session">
-        {providers.map((p) => (
-          <NextPanel key={p} n={ov.next_up.find((x) => x.provider === p)} accounts={ov.accounts} now={now} />
+        {ov.next_up.filter((n) => providers.includes(n.provider)).map((n) => (
+          <NextPanel key={n.provider + n.policy} n={n} accounts={ov.accounts} now={now} />
         ))}
       </section>
       {providers.map((p) => {
@@ -135,7 +135,7 @@ function NextPanel({ n, accounts, now }: { n: NextUp | undefined; accounts: Acco
     <div className="panel">
       <div className="panel-head">
         <ProviderMark provider={n.provider} />
-        <h2>Next {providerName(n.provider)} session</h2>
+        <h2>Next {providerName(n.provider)} {n.policy === "desktop_preferred_plan_affinity" ? "desktop chat" : n.policy === "cli_priority_reset_first" ? "CLI request" : "session"}</h2>
         <span className="sub">{policyLabel[n.policy] ?? n.policy}{n.model ? ` · ${n.model}` : ""}</span>
       </div>
       <div className="panel-body next">

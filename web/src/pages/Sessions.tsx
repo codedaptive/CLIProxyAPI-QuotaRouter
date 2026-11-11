@@ -172,7 +172,7 @@ export function SessionsPage({ provider, search, now }: PageProps) {
                         <Pill tone="good">Bound</Pill>
                       )}
                     </td>
-                    <td data-label="Expires" className="nowrap num hide-md" title={absolute(row.expires_at)}>{relative(row.expires_at, now)}</td>
+                    <td data-label="Expires" className="nowrap num hide-md" title={row.expires_at ? absolute(row.expires_at) : "Desktop binding persists until released or evicted"}>{row.expires_at ? relative(row.expires_at, now) : "No idle expiry"}</td>
                     <td data-label="" className="right">
                       <button
                         className="btn sm ghost"

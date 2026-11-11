@@ -15,6 +15,7 @@ import (
 
 // Binding keeps one session on one account.
 type Binding struct {
+	Desktop        bool      `json:"desktop,omitempty"`
 	Key            string    `json:"key"`
 	Provider       string    `json:"provider"`
 	Scope          string    `json:"scope"`
@@ -66,6 +67,8 @@ type Skip struct {
 
 // Decision explains one pick.
 type Decision struct {
+	Reject           bool `json:"reject,omitempty"`
+	reserveGuard     bool
 	ID               uint64    `json:"id"`
 	At               time.Time `json:"at"`
 	Provider         string    `json:"provider"`
@@ -116,15 +119,28 @@ func (r *Router) Pick(req PickRequest) Decision {
 	now := r.now()
 	provider := normalizeProvider(req.Provider)
 	d := Decision{At: now, Provider: provider, Model: req.Model, Stream: req.Stream, Mode: r.cfg.Mode, Policy: r.cfg.Strategy}
+	for _, c := range req.Candidates {
+		if reason := r.weeklyReserveCause(c.ID, c.Provider, now); reason != "" {
+			d.reserveGuard = true
+			d.Skipped = append(d.Skipped, Skip{AuthID: c.ID, Reason: reason})
+		}
+	}
+
 	if !supportedProvider(provider) {
 		r.counters.Unrelated++
 		d.Outcome, d.Cause = OutcomeDelegated, "provider_not_supported"
+		if d.reserveGuard {
+			return r.pickReserveFallback(req, d, now)
+		}
 		return d
 	}
 	for _, c := range req.Candidates {
 		if normalizeProvider(c.Provider) != provider {
 			r.counters.Unrelated++
 			d.Outcome, d.Cause = OutcomeDelegated, "mixed_provider_candidates"
+			if d.reserveGuard {
+				return r.pickReserveFallback(req, d, now)
+			}
 			return d
 		}
 	}
@@ -150,7 +166,13 @@ func (r *Router) Pick(req PickRequest) Decision {
 		evals[c.ID] = e
 		order = append(order, e)
 	}
-	ranked := r.rank(order, now, r.cfg.Strategy)
+	if r.cfg.ClientRouting.Enabled && !r.desktop(req.Session) {
+		return r.pickLegacy(req, d, order, now)
+	}
+	if r.desktop(req.Session) {
+		d.Policy = "desktop_preferred_plan_affinity"
+	}
+	ranked := r.rankForRequest(order, now, req)
 	if len(ranked) == 0 {
 		// Every ready account is below the new-session minimum: still prefer
 		// one of them by policy over handing the request back to the host.
@@ -159,11 +181,11 @@ func (r *Router) Pick(req PickRequest) Decision {
 				e.rankable, e.cause = true, ""
 			}
 		}
-		ranked = r.rank(order, now, r.cfg.Strategy)
+		ranked = r.rankForRequest(order, now, req)
 	}
 	d.Ranked = ranked
 	for _, e := range order {
-		if !e.rankable {
+		if !e.rankable && !strings.HasPrefix(e.cause, "weekly_reserve_") {
 			d.Skipped = append(d.Skipped, Skip{AuthID: e.c.ID, Reason: e.cause})
 		}
 	}
@@ -180,8 +202,11 @@ func (r *Router) Pick(req PickRequest) Decision {
 
 	if req.PinnedAuthID != "" {
 		if e, ok := evals[req.PinnedAuthID]; ok {
+			if strings.HasPrefix(e.cause, "weekly_reserve_") {
+				return r.finish(d)
+			}
 			d.Outcome, d.AuthID = OutcomeHostPinned, e.c.ID
-			if req.HasSession && r.cfg.AffinityEnabled {
+			if req.HasSession && r.affinity(req.Session) {
 				if b := r.binding(provider, req, now); b != nil {
 					d.BoundAuthID = b.AuthID
 					b.touch(now)
@@ -193,7 +218,7 @@ func (r *Router) Pick(req PickRequest) Decision {
 		}
 	}
 
-	if req.HasSession && r.cfg.AffinityEnabled {
+	if req.HasSession && r.affinity(req.Session) {
 		if b := r.binding(provider, req, now); b != nil {
 			d.BoundAuthID = b.AuthID
 			e := evals[b.AuthID]
@@ -204,7 +229,7 @@ func (r *Router) Pick(req PickRequest) Decision {
 				return r.finish(d)
 			}
 			cause, permanent := r.boundCause(b.AuthID, e, req.Model, now)
-			alt, fallback := r.choose(order, ranked, b.AuthID)
+			alt, fallback := r.chooseForRequest(order, ranked, b.AuthID, req)
 			d.Fallback = fallback
 			if alt == "" {
 				d.Outcome, d.Cause = OutcomeDelegated, "bound_unusable_no_alternative:"+cause
@@ -212,7 +237,7 @@ func (r *Router) Pick(req PickRequest) Decision {
 				return r.finish(d)
 			}
 			rebind := false
-			switch r.cfg.RebindPolicy {
+			switch r.rebindPolicy(req.Session) {
 			case config.RebindConservative:
 				rebind = permanent
 			case config.RebindEager:
@@ -238,7 +263,7 @@ func (r *Router) Pick(req PickRequest) Decision {
 			r.dirty = true
 			return r.finish(d)
 		}
-		if r.cfg.AffinityInheritParent && req.Session.ParentKey != "" {
+		if (r.cfg.AffinityInheritParent || r.desktop(req.Session)) && req.Session.ParentKey != "" {
 			if pb := r.parentBinding(provider, req, now); pb != nil {
 				if e := evals[pb.AuthID]; e != nil && e.usable {
 					d.Outcome, d.AuthID = OutcomeInherited, pb.AuthID
@@ -249,7 +274,7 @@ func (r *Router) Pick(req PickRequest) Decision {
 				}
 			}
 		}
-		alt, fallback := r.choose(order, ranked, "")
+		alt, fallback := r.chooseForRequest(order, ranked, "", req)
 		d.Fallback = fallback
 		if alt == "" {
 			d.Outcome, d.Cause = OutcomeDelegated, "no_trustworthy_quota"
@@ -261,13 +286,16 @@ func (r *Router) Pick(req PickRequest) Decision {
 		return r.finish(d)
 	}
 
-	alt, fallback := r.choose(order, ranked, "")
+	alt, fallback := r.chooseForRequest(order, ranked, "", req)
 	d.Fallback = fallback
 	if alt == "" {
 		d.Outcome, d.Cause = OutcomeDelegated, "no_trustworthy_quota"
 		return r.finish(d)
 	}
 	d.Outcome, d.AuthID = OutcomeNoSession, alt
+	if r.desktop(req.Session) {
+		d.Cause = "desktop_session_missing"
+	}
 	if req.HasSession {
 		d.Cause = "affinity_disabled"
 	}
@@ -275,7 +303,11 @@ func (r *Router) Pick(req PickRequest) Decision {
 }
 
 func (r *Router) finish(d Decision) Decision {
-	d.Applied = r.cfg.Mode == config.ModeActive && d.AuthID != ""
+	if d.AuthID == "" && d.reserveGuard {
+		d.Outcome, d.Cause, d.Reject = "reserve_protected", "weekly_reserve_no_eligible_account", true
+	}
+
+	d.Applied = r.cfg.Mode == config.ModeActive && (d.AuthID != "" || d.Reject)
 	switch {
 	case d.Outcome == OutcomeDelegated:
 		r.counters.Delegated++
@@ -334,6 +366,9 @@ func (r *Router) evaluate(c Candidate, model string, now time.Time) *eval {
 	}
 	if a != nil && !a.Health.AuthFailedAt.IsZero() {
 		return block(fmt.Sprintf("auth_failed_%d", a.Health.AuthFailStatus), true)
+	}
+	if cause := r.weeklyReserveCause(c.ID, c.Provider, now); cause != "" {
+		return block(cause, false)
 	}
 	if a == nil || !a.HasSnapshot {
 		if a != nil && now.Before(a.Health.RateLimitedUntil) {
@@ -538,12 +573,12 @@ func bindingKey(provider, scope, sessionKey string) string {
 }
 
 func (r *Router) binding(provider string, req PickRequest, now time.Time) *Binding {
-	key := bindingKey(provider, r.scope(req.Model), req.Session.Key)
+	key := bindingKey(provider, r.requestScope(req.Model, req.Session), req.Session.Key)
 	b := r.bindings[key]
 	if b == nil {
 		return nil
 	}
-	if now.Sub(b.LastSeen) >= r.cfg.AffinityTTL {
+	if r.expired(b, now) {
 		delete(r.bindings, key)
 		r.dirty = true
 		return nil
@@ -555,14 +590,14 @@ func (r *Router) binding(provider string, req PickRequest, now time.Time) *Bindi
 }
 
 func (r *Router) parentBinding(provider string, req PickRequest, now time.Time) *Binding {
-	if b := r.bindings[bindingKey(provider, r.scope(req.Model), req.Session.ParentKey)]; b != nil && now.Sub(b.LastSeen) < r.cfg.AffinityTTL {
+	if b := r.bindings[bindingKey(provider, r.requestScope(req.Model, req.Session), req.Session.ParentKey)]; b != nil && !r.expired(b, now) {
 		return b
 	}
 	// A subagent may use a different model than its parent; take the parent's
 	// most recently active binding for the same provider.
 	var best *Binding
 	for _, b := range r.bindings {
-		if b.Provider != provider || b.SessionKey != req.Session.ParentKey || now.Sub(b.LastSeen) >= r.cfg.AffinityTTL {
+		if b.Provider != provider || b.SessionKey != req.Session.ParentKey || r.expired(b, now) {
 			continue
 		}
 		if best == nil || b.LastSeen.After(best.LastSeen) {
@@ -573,10 +608,10 @@ func (r *Router) parentBinding(provider string, req PickRequest, now time.Time) 
 }
 
 func (r *Router) bind(provider string, req PickRequest, authID, origin string, now time.Time) *Binding {
-	scope := r.scope(req.Model)
+	scope := r.requestScope(req.Model, req.Session)
 	key := bindingKey(provider, scope, req.Session.Key)
 	b := &Binding{
-		Key: key, Provider: provider, Scope: scope, SessionKey: req.Session.Key, ParentKey: req.Session.ParentKey,
+		Desktop: r.desktop(req.Session), Key: key, Provider: provider, Scope: scope, SessionKey: req.Session.Key, ParentKey: req.Session.ParentKey,
 		Client: req.Session.Client, Kind: string(req.Session.Kind), AuthID: authID, Origin: origin,
 		Applied: r.cfg.Mode == config.ModeActive, CreatedAt: now, LastSeen: now, Requests: 1,
 	}
@@ -605,7 +640,7 @@ func (b *Binding) rebind(authID, cause string, now time.Time) {
 // used 1% so eviction cost is amortized.
 func (r *Router) evictLocked(now time.Time) {
 	for k, b := range r.bindings {
-		if now.Sub(b.LastSeen) >= r.cfg.AffinityTTL {
+		if r.expired(b, now) {
 			delete(r.bindings, k)
 		}
 	}
@@ -643,12 +678,12 @@ func (r *Router) learnLocked(o Outcome, provider string, now time.Time) {
 		return
 	}
 	r.decisions.attach(provider, o.Session.Key, Result{At: now, AuthID: o.AuthID, Status: o.Status, Failed: o.Failed}, now)
-	if !r.cfg.AffinityEnabled || o.Failed {
+	if !r.affinity(o.Session) || o.Failed {
 		return
 	}
-	key := bindingKey(provider, r.scope(o.Model), o.Session.Key)
+	key := bindingKey(provider, r.requestScope(o.Model, o.Session), o.Session.Key)
 	b := r.bindings[key]
-	if b != nil && now.Sub(b.LastSeen) >= r.cfg.AffinityTTL {
+	if b != nil && r.expired(b, now) {
 		delete(r.bindings, key)
 		b = nil
 	}
@@ -663,7 +698,7 @@ func (r *Router) learnLocked(o Outcome, provider string, now time.Time) {
 		return
 	}
 	cause, permanent := r.boundCause(b.AuthID, nil, o.Model, now)
-	if r.cfg.RebindPolicy == config.RebindEager || (r.cfg.RebindPolicy == config.RebindConservative && permanent) || cause == "removed" {
+	if r.rebindPolicy(o.Session) == config.RebindEager || (r.rebindPolicy(o.Session) == config.RebindConservative && permanent) || cause == "removed" {
 		b.rebind(o.AuthID, "learned:"+cause, now)
 		r.counters.Rebinds++
 		r.dirty = true

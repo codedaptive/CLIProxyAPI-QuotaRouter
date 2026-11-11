@@ -9,3 +9,10 @@
 /web/*.tsbuildinfo
 __pycache__/
 *.pyc
+
+# Local test scratch and private deployment state
+/.scratch/
+/config.yaml
+/access.json
+/auth/
+*.sqlite*

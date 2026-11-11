@@ -38,6 +38,9 @@ const (
 
 // Config is the validated plugin configuration.
 type Config struct {
+	MaxWeeklyReserve          MaxWeeklyReserve  `yaml:"max_weekly_reserve" json:"max_weekly_reserve"`
+	Roles                     []Role            `yaml:"roles" json:"roles"`
+	ClientRouting             ClientRouting     `yaml:"client_routing" json:"client_routing"`
 	Mode                      string            `yaml:"mode" json:"mode"`
 	Strategy                  string            `yaml:"strategy" json:"strategy"`
 	ManualPriorityBase        string            `yaml:"manual_priority_base" json:"manual_priority_base"`
@@ -67,6 +70,8 @@ type Config struct {
 // Default returns the configuration used when a key is absent.
 func Default() Config {
 	return Config{
+		MaxWeeklyReserve:          MaxWeeklyReserve{RemainingPercent: 10, ReleaseBefore: 24 * time.Hour},
+		ClientRouting:             defaultClientRouting(),
 		Mode:                      ModeShadow,
 		Strategy:                  StrategyResetFirst,
 		ManualPriorityBase:        StrategyResetFirst,
@@ -163,7 +168,15 @@ var aliasPattern = regexp.MustCompile(`^[\p{L}\p{N} ._@+\-()#/]{1,40}$`)
 
 // Validate checks ranges and enumerations.
 func (c Config) Validate() Errors {
-	var errs Errors
+	errs := c.ClientRouting.validate()
+	errs = append(errs, c.MaxWeeklyReserve.validate()...)
+	if c.MaxWeeklyReserve.Enabled && !c.ScheduleAcrossPriorities {
+		errs = append(errs, FieldError{Field: "schedule_across_priorities", Message: "must be enabled for the Max weekly reserve"})
+	}
+	errs = append(errs, validateRoles(c.Roles)...)
+	if c.ClientRouting.Enabled && !c.ScheduleAcrossPriorities {
+		errs = append(errs, FieldError{Field: "schedule_across_priorities", Message: "must be enabled for desktop plan preferences"})
+	}
 	add := func(field, format string, args ...any) {
 		errs = append(errs, FieldError{Field: field, Message: fmt.Sprintf(format, args...)})
 	}
@@ -278,6 +291,9 @@ func (c Config) yamlMap() map[string]any {
 	}
 	return map[string]any{
 		"mode":                          c.Mode,
+		"client_routing":                c.ClientRouting.public(),
+		"max_weekly_reserve":            c.MaxWeeklyReserve.public(),
+		"roles":                         publicRoles(c.Roles),
 		"strategy":                      c.Strategy,
 		"manual_priority_base":          c.ManualPriorityBase,
 		"poll_interval":                 c.PollInterval.String(),

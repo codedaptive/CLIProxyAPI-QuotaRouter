@@ -29,12 +29,13 @@ const (
 // Ref identifies one session. ID and ParentID are CPA-format identities and
 // must not leave the process; only Key and ParentKey are stored or shown.
 type Ref struct {
-	ID        string
-	ParentID  string
-	Client    string
-	Kind      Kind
-	Key       string
-	ParentKey string
+	CallerScope string
+	ID          string
+	ParentID    string
+	Client      string
+	Kind        Kind
+	Key         string
+	ParentKey   string
 }
 
 const executionSessionKey = "execution_session_id"
@@ -44,6 +45,13 @@ const callerScopeKey = "caller_scope"
 func FromRequest(h http.Header, meta map[string]any) (Ref, bool) {
 	scope, _ := meta[callerScopeKey].(string)
 	id, parent, client, fork := extract(h, meta)
+	if id == "" {
+		if canonical, ok := meta["canonical_session_id"].(string); ok && !strings.HasPrefix(canonical, "clientreq:") {
+			id = normalize(canonical)
+			parent, _ = meta["parent_session_id"].(string)
+			client, _, _ = strings.Cut(id, ":")
+		}
+	}
 	return build(strings.TrimSpace(scope), id, parent, client, fork)
 }
 
@@ -84,7 +92,7 @@ func Short(key string) string {
 
 func build(scope, id, parent, client string, fork bool) (Ref, bool) {
 	if id == "" {
-		return Ref{}, false
+		return Ref{CallerScope: scope}, false
 	}
 	id = bound(id)
 	if parent != "" {
@@ -93,7 +101,7 @@ func build(scope, id, parent, client string, fork bool) (Ref, bool) {
 	if parent == id {
 		parent = ""
 	}
-	r := Ref{ID: id, ParentID: parent, Client: client, Kind: Main, Key: Key(scope, id)}
+	r := Ref{CallerScope: scope, ID: id, ParentID: parent, Client: client, Kind: Main, Key: Key(scope, id)}
 	if parent != "" {
 		r.ParentKey = Key(scope, parent)
 		r.Kind = Subagent

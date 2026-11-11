@@ -30,7 +30,7 @@ FIXED_TIME = (1980, 1, 1, 0, 0, 0)
 
 
 def check_version(version):
-    if not re.fullmatch(r"\d+(\.\d+)+", version):
+    if not re.fullmatch(r"\d+(\.\d+)+(?:-[a-z0-9.]+)?", version):
         sys.exit(
             f"invalid version {version!r}; expected dotted numbers without a leading v"
         )

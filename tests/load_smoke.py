@@ -1,6 +1,6 @@
 """Load a release zip into the official CLIProxyAPI binary on this machine.
 
-Usage: load_smoke.py <cpa-archive> <cpa-checksums.txt> <plugin-zip>
+Usage: load_smoke.py <cpa-archive> <cpa-checksums.txt> <plugin-zip> [--desktop-policy] [--max-reserve]
 
 Installs the plugin where the CLIProxyAPI plugin store puts it
 (plugins/<goos>/<goarch>/<id>-v<version>.<ext>), starts CLIProxyAPI with no
@@ -59,7 +59,7 @@ def extract_cpa(archive, dest):
 
 def install_plugin(plugin_zip, plugins_dir, cpa_archive):
     match = re.fullmatch(
-        rf"{PLUGIN}_(\d+(?:\.\d+)+)_(linux|darwin|windows)_(amd64|arm64)\.zip",
+        rf"{PLUGIN}_(\d+(?:\.\d+)+(?:-[a-z0-9.]+)?)_(linux|darwin|windows)_(amd64|arm64)\.zip",
         plugin_zip.name,
     )
     if match is None:
@@ -92,7 +92,7 @@ def free_port():
         return probe.getsockname()[1]
 
 
-def write_config(path, port, auth_dir, plugins_dir):
+def write_config(path, port, auth_dir, plugins_dir, desktop_policy=False, max_reserve=False):
     lines = [
         "host: 127.0.0.1",
         f"port: {port}",
@@ -111,6 +111,15 @@ def write_config(path, port, auth_dir, plugins_dir):
         "      priority: 10",
         "      mode: shadow",
     ]
+    if desktop_policy:
+        scope = hashlib.sha256(b"cli-proxy-api:caller-scope:v1\x00load-smoke-client-key").hexdigest()
+        lines.extend([
+            "      client_routing:",
+            "        enabled: true",
+            f"        desktop_caller_scopes: [{scope}]",
+        ])
+    if max_reserve:
+        lines.extend(["      max_weekly_reserve: {enabled: true, remaining_percent: 10, release_before: 24h}"])
     path.write_text("\n".join(lines) + "\n")
 
 
@@ -151,6 +160,23 @@ def check_status(status, version):
         raise AssertionError(f"credential list callback failed: {status['list_error']}")
 
 
+def check_desktop_policy(port):
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    base = f"http://127.0.0.1:{port}/v0/management/plugins/{PLUGIN}"
+
+    def get(path):
+        request = urllib.request.Request(base + path, headers={"Authorization": "Bearer " + MANAGEMENT_KEY})
+        with opener.open(request, timeout=5) as response:
+            return json.load(response)
+
+    config = get("/settings")["config"]["client_routing"]
+    assert config["enabled"] is True, config
+    assert len(config["desktop_caller_scopes"]) == 1, config
+    actual = {(item["provider"], item["policy"]) for item in get("/overview")["next_up"]}
+    expected = {(provider, policy) for provider in ("claude", "codex") for policy in ("cli_priority_reset_first", "desktop_preferred_plan_affinity")}
+    assert actual == expected, actual
+
+
 def stop(proc):
     if proc.poll() is None:
         proc.terminate()
@@ -162,10 +188,14 @@ def stop(proc):
 
 
 def main():
-    if len(sys.argv) != 4:
+    args = sys.argv[1:]
+    desktop_policy = "--desktop-policy" in args
+    max_reserve = "--max-reserve" in args
+    args = [arg for arg in args if arg not in ("--desktop-policy", "--max-reserve")]
+    if len(args) != 3:
         sys.exit(__doc__)
     cpa_archive, cpa_checksums, plugin_zip = (
-        Path(arg).resolve() for arg in sys.argv[1:]
+        Path(arg).resolve() for arg in args
     )
     verify_checksum(cpa_archive, cpa_checksums)
     with tempfile.TemporaryDirectory(
@@ -179,7 +209,7 @@ def main():
         auth_dir.mkdir()
         port = free_port()
         config = root / "config.yaml"
-        write_config(config, port, auth_dir, plugins_dir)
+        write_config(config, port, auth_dir, plugins_dir, desktop_policy, max_reserve)
         log_path = root / "cpa.log"
         with log_path.open("w") as log:
             proc = subprocess.Popen(
@@ -193,8 +223,17 @@ def main():
                 # Read again after the first quota refresh has had time to run.
                 time.sleep(3)
                 check_status(read_status(port, proc, 30), version)
+                if desktop_policy:
+                    check_desktop_policy(port)
+                if max_reserve:
+                    request = urllib.request.Request(
+                        f"http://127.0.0.1:{port}/v0/management/plugins/{PLUGIN}/settings",
+                        headers={"Authorization": "Bearer " + MANAGEMENT_KEY})
+                    with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=5) as response:
+                        reserve = json.load(response)["config"]["max_weekly_reserve"]
+                    assert reserve == {"enabled": True, "remaining_percent": 10, "release_before": "24h0m0s"}, reserve
                 print(
-                    f"PASS: {PLUGIN} {version} loaded and registered in {cpa_archive.name} ({platform})"
+                    f"PASS: {PLUGIN} {version} loaded and registered in {cpa_archive.name} ({platform}); desktop policy {'enabled' if desktop_policy else 'disabled'}; Max reserve {'enabled' if max_reserve else 'disabled'}"
                 )
             except BaseException:
                 log.flush()

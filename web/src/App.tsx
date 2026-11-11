@@ -8,6 +8,7 @@ import { AccountsPage } from "./pages/Accounts";
 import { ActivityPage } from "./pages/Activity";
 import { OverviewPage } from "./pages/Overview";
 import { SessionsPage } from "./pages/Sessions";
+import { RolesPage } from "./pages/Roles";
 import { SettingsPage } from "./pages/Settings";
 import { UsagePage } from "./pages/Usage";
 import type { Overview, Provider } from "./types";
@@ -22,13 +23,14 @@ export interface PageProps {
   now: number;
 }
 
-type Route = "overview" | "accounts" | "sessions" | "activity" | "usage" | "settings";
+type Route = "overview" | "accounts" | "sessions" | "activity" | "usage" | "roles" | "settings";
 const routes: { id: Route; label: string; icon: () => ReactNode; group: string; filters: boolean }[] = [
   { id: "overview", label: "Overview", icon: IconOverview, group: "Monitor", filters: true },
   { id: "accounts", label: "Accounts & Quotas", icon: IconAccounts, group: "Monitor", filters: true },
   { id: "sessions", label: "Sessions", icon: IconSessions, group: "Monitor", filters: true },
   { id: "activity", label: "Activity", icon: IconActivity, group: "Analyze", filters: true },
   { id: "usage", label: "Usage", icon: IconUsage, group: "Analyze", filters: false },
+  { id: "roles", label: "Role routing", icon: IconOverview, group: "Configure", filters: false },
   { id: "settings", label: "Settings", icon: IconSettings, group: "Configure", filters: false },
 ];
 
@@ -253,6 +255,8 @@ function Page({ route, props }: { route: Route; props: PageProps }) {
       return <ActivityPage {...props} />;
     case "usage":
       return <UsagePage {...props} />;
+    case "roles":
+      return <RolesPage {...props} />;
     case "settings":
       return <SettingsPage {...props} />;
     default:

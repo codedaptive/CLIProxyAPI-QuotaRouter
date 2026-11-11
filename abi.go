@@ -93,12 +93,21 @@ func (h *nativeHost) call(method string, request any, result any) error {
 	var response C.cliproxy_buffer
 	code := C.bridge_host_call(&h.api, m, (*C.uint8_t)(p), C.size_t(len(raw)), &response)
 	defer C.bridge_host_free(&h.api, &response)
-	if code != 0 || response.ptr == nil || response.len == 0 || response.len > maxRPCBytes {
+	if response.ptr == nil || response.len == 0 || response.len > maxRPCBytes {
 		return errors.New("host_callback_failed")
 	}
 	var envelope pluginabi.Envelope
-	if err := json.Unmarshal(C.GoBytes(response.ptr, C.int(response.len)), &envelope); err != nil || !envelope.OK {
+	if err := json.Unmarshal(C.GoBytes(response.ptr, C.int(response.len)), &envelope); err != nil {
 		return errors.New("host_response_failed")
+	}
+	if !envelope.OK {
+		if envelope.Error != nil {
+			return envelope.Error
+		}
+		return errors.New("host_response_failed")
+	}
+	if code != 0 {
+		return errors.New("host_callback_failed")
 	}
 	if err := json.Unmarshal(envelope.Result, result); err != nil {
 		return errors.New("host_result_invalid")
@@ -121,4 +130,9 @@ func (h *nativeHost) Get(index string) (json.RawMessage, error) {
 		return nil, errors.New("credential_identity_mismatch")
 	}
 	return result.JSON, err
+}
+
+// Call exposes authenticated model/stream callbacks to role routing.
+func (h *nativeHost) Call(method string, request any, result any) error {
+	return h.call(method, request, result)
 }

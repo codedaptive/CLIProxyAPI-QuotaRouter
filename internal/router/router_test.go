@@ -727,8 +727,12 @@ func TestPollSchedulingBackoffAndResets(t *testing.T) {
 	if d := h.r.NextPollAt().Sub(h.now); d != 20*time.Minute {
 		t.Fatalf("Retry-After ignored: %s", d)
 	}
+	if n, wait := h.r.RequestRefresh("A"); n != 0 || wait != 20*time.Minute {
+		t.Fatal("manual refresh bypassed quota cooldown")
+	}
+	h.advance(20 * time.Minute)
 	if n, wait := h.r.RequestRefresh("A"); n != 1 || wait != 0 {
-		t.Fatal("manual refresh refused")
+		t.Fatal("manual refresh refused after cooldown")
 	}
 	if _, wait := h.r.RequestRefresh("A"); wait == 0 {
 		t.Fatal("manual refresh not rate limited")

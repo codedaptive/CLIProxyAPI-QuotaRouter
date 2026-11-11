@@ -1,8 +1,8 @@
 IMAGE := golang:1.26-bookworm@sha256:a688600ca24f8a4d3ca77f95b0dd40704a9fc787c826660eb7ba0b641b8b175d
-GO_VERSION := 1.26.8
+GO_VERSION := 1.26.10
 # SHA-256 of https://go.dev/dl/go$(GO_VERSION).src.tar.gz, the source of the patched darwin_amd64 toolchain.
-GO_SRC_SHA256 := 4e39b98e42f946fa05ac8bc5b71877df97dbdb7cbb1a777b541667ad7117fd2e
-CPA_VERSION := 8.0.27
+GO_SRC_SHA256 := fd63e883ba2f2bfca93c1646b31ebef63e2b1e4d2b317c9789d976a68d81f36f
+CPA_VERSION := 8.0.67
 PLUGIN := kpatdev-quota-router
 VERSION := $(shell sed -n 's/^const Version = "\(.*\)"/\1/p' internal/plugin/runtime.go)
 TARGETS := linux_amd64 linux_arm64 darwin_amd64 darwin_arm64 windows_amd64
@@ -42,7 +42,7 @@ ifeq ($(filter $(TARGET),$(TARGETS)),)
 $(error TARGET must be one of: $(TARGETS))
 endif
 
-.PHONY: demo web test linux-test build zip checksums release-assets native-test host-test load-test cpa version clean
+.PHONY: demo web test linux-test build zip checksums release-assets native-test host-test load-test role-test cpa version clean
 
 test: $(TOOLCHAIN)
 	$(CHECKS)
@@ -108,7 +108,11 @@ endif
 
 # Runs on this machine, so TARGET must match it.
 load-test: cpa
-	python3 tests/load_smoke.py dist/cpa/$(CPA_ASSET) dist/cpa/checksums-$(CPA_VERSION).txt $(ZIP)
+	python3 tests/load_smoke.py dist/cpa/$(CPA_ASSET) dist/cpa/checksums-$(CPA_VERSION).txt $(ZIP) --desktop-policy --max-reserve
+	python3 tests/role_smoke.py dist/cpa/$(CPA_ASSET) dist/cpa/checksums-$(CPA_VERSION).txt $(ZIP)
+
+role-test: cpa
+	python3 tests/role_smoke.py dist/cpa/$(CPA_ASSET) dist/cpa/checksums-$(CPA_VERSION).txt $(ZIP)
 
 cpa:
 	mkdir -p dist/cpa

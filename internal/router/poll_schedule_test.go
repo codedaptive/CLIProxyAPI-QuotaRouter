@@ -154,3 +154,43 @@ func TestProbeObservationIsPerWindow(t *testing.T) {
 		t.Fatal("one observed window suppressed another window's probe")
 	}
 }
+
+func TestQuota429NeverPollsFasterThanConfiguredCadence(t *testing.T) {
+	h := newHarness(t, func(c *config.Config) { c.PollInterval = 10 * time.Minute })
+	h.roster("claude", "A", "B")
+	h.r.SetJitter(func() float64 { return 0 })
+	h.r.ApplyPoll("A", quota.Snapshot{}, "", &quota.Error{Code: "quota_http_429", Status: 429})
+	deadline := h.r.accounts["A"].NextPoll
+	if deadline.Before(h.now.Add(10 * time.Minute)) {
+		t.Fatalf("429 accelerated polling: %v", deadline)
+	}
+	if n, wait := h.r.RequestRefresh(""); n != 1 || wait != 0 {
+		t.Fatalf("healthy refresh blocked: %d %v", n, wait)
+	}
+	if !h.r.accounts["A"].NextPoll.Equal(deadline) {
+		t.Fatal("refresh-all bypassed cooldown")
+	}
+	if n, wait := h.r.RequestRefresh("A"); n != 0 || wait < 10*time.Minute {
+		t.Fatalf("single refresh bypassed cooldown: %d %v", n, wait)
+	}
+	for _, task := range h.r.DuePolls() {
+		if task.AuthID == "A" {
+			t.Fatal("rate-limited account polled")
+		}
+	}
+}
+
+func TestQuotaCooldownSurvivesStateReload(t *testing.T) {
+	h := newHarness(t)
+	h.roster("claude", "A")
+	h.r.ApplyPoll("A", quota.Snapshot{}, "", &quota.Error{Code: "quota_http_429", RetryAfter: 20 * time.Minute})
+	state := h.r.Export()
+	restored := New(h.r.Config(), func() time.Time { return h.now })
+	restored.Import(state)
+	if !restored.accounts["A"].NextPoll.Equal(h.r.accounts["A"].NextPoll) {
+		t.Fatal("reload erased cooldown")
+	}
+	if len(restored.DuePolls()) != 0 {
+		t.Fatal("reload polled rate-limited account")
+	}
+}

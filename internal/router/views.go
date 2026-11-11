@@ -94,7 +94,7 @@ type SessionView struct {
 	Applied        bool       `json:"applied"`
 	CreatedAt      time.Time  `json:"created_at"`
 	LastSeen       time.Time  `json:"last_seen"`
-	ExpiresAt      time.Time  `json:"expires_at"`
+	ExpiresAt      *time.Time `json:"expires_at"`
 	Requests       int        `json:"requests"`
 	Failovers      int        `json:"failovers"`
 	LastFailoverAt *time.Time `json:"last_failover_at,omitempty"`
@@ -166,6 +166,14 @@ func (r *Router) simulateLocked(provider, model, strategy string, now time.Time)
 		order = append(order, r.evaluate(c, model, now))
 	}
 	n.Ranked = r.rank(order, now, strategy)
+	if strategy == "cli_priority_reset_first" {
+		n.Ranked = r.legacyRank(order, now)
+	}
+	var desktopReq PickRequest
+	if strategy == "desktop_preferred_plan_affinity" && len(r.cfg.ClientRouting.DesktopCallerScopes) > 0 {
+		desktopReq = PickRequest{Provider: provider, Model: model, Session: session.Ref{CallerScope: r.cfg.ClientRouting.DesktopCallerScopes[0]}}
+		n.Ranked = r.rankForRequest(order, now, desktopReq)
+	}
 	for _, e := range order {
 		if !e.rankable {
 			n.Skipped = append(n.Skipped, Skip{AuthID: e.c.ID, Reason: e.cause})
@@ -173,6 +181,16 @@ func (r *Router) simulateLocked(provider, model, strategy string, now time.Time)
 	}
 	n.Skipped = append(n.Skipped, withheld...)
 	id, fallback := r.choose(order, n.Ranked, "")
+	if strategy == "cli_priority_reset_first" {
+		id = ""
+		fallback = false
+		if len(n.Ranked) > 0 {
+			id = n.Ranked[0].AuthID
+		}
+	}
+	if strategy == "desktop_preferred_plan_affinity" {
+		id, fallback = r.chooseForRequest(order, n.Ranked, "", desktopReq)
+	}
 	n.AuthID, n.Fallback = id, fallback
 	switch {
 	case id == "":
@@ -193,6 +211,16 @@ func (r *Router) NextUp() []NextUp {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.now()
+	if r.cfg.ClientRouting.Enabled {
+		var out []NextUp
+		for _, p := range []string{"claude", "codex"} {
+			out = append(out, r.simulateLocked(p, "", "cli_priority_reset_first", now))
+			if len(r.cfg.ClientRouting.DesktopCallerScopes) > 0 {
+				out = append(out, r.simulateLocked(p, "", "desktop_preferred_plan_affinity", now))
+			}
+		}
+		return out
+	}
 	return []NextUp{r.simulateLocked("claude", "", r.cfg.Strategy, now), r.simulateLocked("codex", "", r.cfg.Strategy, now)}
 }
 
@@ -223,7 +251,7 @@ func (r *Router) Accounts() []AccountView {
 	now := r.now()
 	active := map[string]int{}
 	for _, b := range r.bindings {
-		if now.Sub(b.LastSeen) < r.cfg.AffinityTTL {
+		if !r.expired(b, now) {
 			active[b.AuthID]++
 		}
 	}
@@ -346,15 +374,18 @@ func (r *Router) Sessions() []SessionView {
 	now := r.now()
 	out := make([]SessionView, 0, len(r.bindings))
 	for _, b := range r.bindings {
-		if now.Sub(b.LastSeen) >= r.cfg.AffinityTTL {
+		if r.expired(b, now) {
 			continue
 		}
 		v := SessionView{
 			Session: session.Short(b.SessionKey), Client: b.Client, Kind: b.Kind, Provider: b.Provider, Model: b.Scope,
 			AuthID: b.AuthID, ActualAuthID: b.ActualAuthID, Origin: b.Origin, Applied: b.Applied,
-			CreatedAt: b.CreatedAt, LastSeen: b.LastSeen, ExpiresAt: b.LastSeen.Add(r.cfg.AffinityTTL),
+			CreatedAt: b.CreatedAt, LastSeen: b.LastSeen, ExpiresAt: tp(b.LastSeen.Add(r.cfg.AffinityTTL)),
 			Requests: b.Requests, Failovers: b.Failovers, LastFailoverAt: tp(b.LastFailoverAt),
 			Rebinds: b.Rebinds, LastRebindAt: tp(b.LastRebindAt), LastRebindWhy: b.LastRebindWhy, PreviousAuthID: b.PreviousAuthID,
+		}
+		if b.Desktop {
+			v.ExpiresAt = nil
 		}
 		if b.ParentKey != "" {
 			v.Parent = session.Short(b.ParentKey)
@@ -450,7 +481,7 @@ func (r *Router) Status() Status {
 	now := r.now()
 	s := Status{Mode: r.cfg.Mode, Policy: r.cfg.Strategy, RosterOK: r.rosterOK, RosterError: r.rosterErr, RosterAt: r.rosterAt, Counters: r.counters, SessionsByProv: map[string]int{}}
 	for _, b := range r.bindings {
-		if now.Sub(b.LastSeen) < r.cfg.AffinityTTL && (b.Applied || r.cfg.Mode == config.ModeShadow) {
+		if !r.expired(b, now) && (b.Applied || r.cfg.Mode == config.ModeShadow) {
 			s.Sessions++
 			s.SessionsByProv[b.Provider]++
 		}

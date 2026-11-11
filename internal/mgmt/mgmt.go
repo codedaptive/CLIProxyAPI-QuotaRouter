@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kpatdev/quota-router/internal/config"
+	"github.com/kpatdev/quota-router/internal/roles"
 	"github.com/kpatdev/quota-router/internal/router"
 	"github.com/kpatdev/quota-router/internal/telemetry"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
@@ -42,10 +43,11 @@ type RuntimeInfo struct {
 
 // Server answers management and resource requests.
 type Server struct {
-	Router    *router.Router
-	Telemetry *telemetry.Recorder
-	Now       func() time.Time
-	Info      func() RuntimeInfo
+	RoleStatus func() []roles.Decision
+	Router     *router.Router
+	Telemetry  *telemetry.Recorder
+	Now        func() time.Time
+	Info       func() RuntimeInfo
 	// Refresh schedules polls and wakes the poller. Empty authID means all.
 	Refresh func(authID string) (int, time.Duration)
 }
@@ -57,6 +59,7 @@ type route struct {
 }
 
 var routes = []route{
+	{http.MethodGet, "/roles", (*Server).roleStatus},
 	{http.MethodGet, "/status", (*Server).status},
 	{http.MethodGet, "/overview", (*Server).overview},
 	{http.MethodGet, "/accounts", (*Server).accounts},
@@ -430,7 +433,7 @@ func (s *Server) refresh(req pluginapi.ManagementRequest) pluginapi.ManagementRe
 	}
 	n, wait := s.Refresh(body.AuthID)
 	if wait > 0 {
-		resp := problem(http.StatusTooManyRequests, "refresh_rate_limited", "Manual refresh is limited to once every 30 seconds.")
+		resp := problem(http.StatusTooManyRequests, "refresh_rate_limited", "Quota refresh is cooling down. Retry after the indicated delay.")
 		resp.Headers.Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
 		return resp
 	}
@@ -511,6 +514,8 @@ func (s *Server) export(pluginapi.ManagementRequest) pluginapi.ManagementRespons
 	pub["account_alias"] = len(cfg.AccountAlias)
 	pub["account_priority"] = len(cfg.AccountPriority)
 	pub["state_dir"] = "(redacted)"
+	pub["roles"] = len(cfg.Roles)
+	pub["client_routing"] = map[string]any{"enabled": cfg.ClientRouting.Enabled, "desktop_scope_count": len(cfg.ClientRouting.DesktopCallerScopes), "account_plan_count": len(cfg.ClientRouting.AccountPlans), "preferred_plans": cfg.ClientRouting.PreferredPlans}
 	handles := map[string]string{}
 	handle := func(id string) string {
 		if id == "" {
@@ -556,4 +561,12 @@ func (s *Server) export(pluginapi.ManagementRequest) pluginapi.ManagementRespons
 		"config": pub, "status": s.Router.Status(), "accounts": accounts, "decisions": decisions,
 		"sessions": len(s.Router.Sessions()),
 	})
+}
+
+func (s *Server) roleStatus(pluginapi.ManagementRequest) pluginapi.ManagementResponse {
+	var decisions []roles.Decision
+	if s.RoleStatus != nil {
+		decisions = s.RoleStatus()
+	}
+	return jsonResponse(http.StatusOK, map[string]any{"decisions": decisions})
 }

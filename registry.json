@@ -3,13 +3,19 @@
   "plugins": [
     {
       "id": "kpatdev-quota-router",
-      "name": "Quota Router",
-      "description": "Quota-aware routing and session affinity for Claude and Codex OAuth accounts, with a built-in dashboard.",
-      "author": "kpatdev",
-      "repository": "https://github.com/kpatdev/quota-router",
-      "homepage": "https://github.com/kpatdev/quota-router",
+      "name": "Codedaptive Quota Router",
+      "description": "Quota routing, desktop session affinity, model/effort roles, and Claude weekly reserve.",
+      "author": "Codedaptive; based on kpatdev quota-router",
+      "repository": "https://github.com/codedaptive/quota-router",
+      "homepage": "https://github.com/codedaptive/quota-router",
       "license": "MIT",
-      "tags": ["Scheduler", "Quota", "Claude", "Codex", "Management"]
+      "tags": [
+        "Scheduler",
+        "Quota",
+        "Claude",
+        "Codex",
+        "Management"
+      ]
     }
   ]
 }

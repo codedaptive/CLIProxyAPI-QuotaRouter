@@ -12,14 +12,17 @@ const StateVersion = 1
 
 // AccountState is the persisted part of an account. It holds no credentials.
 type AccountState struct {
-	ID          string         `json:"id"`
-	Provider    string         `json:"provider"`
-	Display     string         `json:"display"`
-	PlanType    string         `json:"plan_type,omitempty"`
-	Identity    string         `json:"identity,omitempty"`
-	Snapshot    quota.Snapshot `json:"snapshot"`
-	HasSnapshot bool           `json:"has_snapshot"`
-	Health      health         `json:"health"`
+	PollRetryAt  time.Time      `json:"poll_retry_at,omitempty"`
+	PollFailures int            `json:"poll_failures,omitempty"`
+	PollError    string         `json:"poll_error,omitempty"`
+	ID           string         `json:"id"`
+	Provider     string         `json:"provider"`
+	Display      string         `json:"display"`
+	PlanType     string         `json:"plan_type,omitempty"`
+	Identity     string         `json:"identity,omitempty"`
+	Snapshot     quota.Snapshot `json:"snapshot"`
+	HasSnapshot  bool           `json:"has_snapshot"`
+	Health       health         `json:"health"`
 }
 
 // State is everything the router persists.
@@ -39,10 +42,11 @@ func (r *Router) Export() State {
 		s.Accounts = append(s.Accounts, AccountState{
 			ID: a.ID, Provider: a.Provider, Display: a.Display, PlanType: a.PlanType, Identity: a.Identity,
 			Snapshot: a.Snapshot.Clone(), HasSnapshot: a.HasSnapshot, Health: cloneHealth(a.Health),
+			PollRetryAt: a.NextPoll, PollFailures: a.PollFailures, PollError: a.PollError,
 		})
 	}
 	for _, b := range r.bindings {
-		if now.Sub(b.LastSeen) < r.cfg.AffinityTTL {
+		if !r.expired(b, now) {
 			s.Bindings = append(s.Bindings, *b)
 		}
 	}
@@ -69,10 +73,16 @@ func (r *Router) Import(s State) {
 			ID: as.ID, Provider: as.Provider, Display: as.Display, PlanType: as.PlanType, Identity: as.Identity,
 			Snapshot: as.Snapshot, HasSnapshot: as.HasSnapshot, Health: as.Health, NextPoll: now, Present: true,
 		}
+		// Preserve upstream cooldowns across library/config reloads. Older state
+		// without these optional fields still gets the usual initial poll.
+		if as.PollFailures > 0 && as.PollError == "quota_http_429" && as.PollRetryAt.After(now) {
+			a := r.accounts[as.ID]
+			a.NextPoll, a.PollFailures, a.PollError = as.PollRetryAt, as.PollFailures, as.PollError
+		}
 	}
 	for i := range s.Bindings {
 		b := s.Bindings[i]
-		if b.Key == "" || b.AuthID == "" || now.Sub(b.LastSeen) >= r.cfg.AffinityTTL || b.LastSeen.After(now.Add(time.Hour)) {
+		if b.Key == "" || b.AuthID == "" || r.expired(&b, now) || b.LastSeen.After(now.Add(time.Hour)) {
 			continue
 		}
 		r.bindings[b.Key] = &b

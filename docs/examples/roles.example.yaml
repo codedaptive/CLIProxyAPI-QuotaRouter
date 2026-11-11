@@ -1,0 +1,28 @@
+# Plugin configuration fragment for MiniLLM 1.1.0-minillm.2.
+# Merge under plugins.configs.kpatdev-quota-router, or convert to JSON
+# for that plugin's config PATCH endpoint. Not a complete CPA config.
+# Verify the model IDs and effort capabilities on the destination proxy.
+roles:
+  - name: designer
+    enabled: true
+    allow_client_effort_override: false
+    cooldown_seconds: 30
+    targets:
+      - model: claude-opus-5-5
+        effort: high
+      - model: gpt-6.1-sol
+        effort: xhigh
+
+  - name: reviewer
+    enabled: true
+    allow_client_effort_override: true
+    cooldown_seconds: 30
+    targets:
+      - model: claude-opus-5-5
+        effort: high
+        effort_map:
+          xhigh: high
+      - model: gpt-6.1-sol
+        effort: xhigh
+        effort_map:
+          max: xhigh

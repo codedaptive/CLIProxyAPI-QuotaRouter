@@ -1,4 +1,36 @@
+# Codedaptive quota and role router
+
+This fork of [kpatdev/quota-router](https://github.com/kpatdev/quota-router)
+adds opt-in desktop account preferences and persistent affinity, model/effort roles
+with fallback and failback, and a Claude Ultra/Max weekly reserve.
+
+- [Desktop routing](docs/minillm-desktop-routing.md)
+- [Role configuration and YAML examples](docs/role-routing-howto.md)
+- [Weekly reserve](docs/max-weekly-reserve.md)
+- [Codedaptive dashboard and installation](https://github.com/codedaptive/Cli-Proxy-API-Management-Center/blob/main/docs/codedaptive-setup.md)
+- [Codedaptive core](https://github.com/codedaptive/CLIProxyAPI)
+
+Upstream baseline is **1.1.0**. The existing plugin ID `kpatdev-quota-router`
+and state format are retained for compatibility; do not install this alongside
+another copy of that plugin or a competing quota scheduler. The custom source
+version is `1.1.0-minillm.5`; a source push is not a new signed store release.
+
+Build the embedded web UI before the Go library. Run Go race tests and the isolated
+load/role smoke tests against the intended core release before deployment. See
+[the integration record](docs/codedaptive-integration.md) for tested versions.
+
+The original upstream documentation follows; upstream downloads do not contain
+these fork extensions. Keep the original license and notices when redistributing.
+
+---
+
+MiniLLM Claude Ultra / Max reserve: [10% until the final 24 hours](docs/max-weekly-reserve.md).
+
+MiniLLM role routing: [configuration, behavior and verification](docs/role-routing.md).
+
 # kpatdev-quota-router
+
+> MiniLLM local revision: [desktop-specific routing and deployment notes](docs/minillm-desktop-routing.md). Upstream behavior remains the default until the extension is enabled.
 
 A [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) (CPA) scheduler plugin for Claude and Codex OAuth accounts. It keeps each conversation on one account and sends new conversations to the account whose quota is most at risk of expiring unused. It ships with a built-in dashboard.
 
@@ -58,7 +90,7 @@ It never sends inference requests to measure quota and never refreshes or writes
 
 ## Install
 
-1. Download `kpatdev-quota-router_<version>_<os>_<arch>.zip` for your platform from the [latest release](https://github.com/kpatdev/quota-router/releases/latest) and check it against `checksums.txt`. Optionally verify build provenance: `gh attestation verify <zip> --repo kpatdev/quota-router`.
+1. Download `kpatdev-quota-router_<version>_<os>_<arch>.zip` for your platform from the [latest release](https://github.com/codedaptive/quota-router/releases) and check it against `checksums.txt`. Optionally verify build provenance: `gh attestation verify <zip> --repo codedaptive/quota-router`.
 2. Extract `kpatdev-quota-router.so` (Linux), `.dylib` (macOS), or `.dll` (Windows) into CPA's plugin directory (`plugins.dir`) as a regular file. Symlinks are not loaded.
 3. Merge into `config.yaml`:
 
@@ -85,7 +117,7 @@ Once this repository has a published release containing the platform ZIPs and
 `checksums.txt`, add this custom store URL in CLIProxyAPI's plugin store:
 
 ```text
-https://raw.githubusercontent.com/kpatdev/quota-router/main/registry.json
+https://raw.githubusercontent.com/codedaptive/quota-router/main/registry.json
 ```
 
 Alternatively, merge these settings into your existing Docker deployment's
@@ -96,7 +128,7 @@ plugins:
   enabled: true
   dir: /CLIProxyAPI/plugins
   store-sources:
-    - https://raw.githubusercontent.com/kpatdev/quota-router/main/registry.json
+    - https://raw.githubusercontent.com/codedaptive/quota-router/main/registry.json
   configs:
     kpatdev-quota-router:
       enabled: true
@@ -207,7 +239,9 @@ All routes are under `/v0/management/plugins/kpatdev-quota-router/` and require 
 
 `GET status` · `GET overview` · `GET accounts` · `GET sessions` · `GET activity` · `GET decision?id=` · `GET usage?range=6h|24h|7d` · `GET settings` · `POST settings/validate` · `POST refresh` · `POST simulate` · `POST sessions/clear` · `GET export`
 
-`status` keeps the fields of the original plugin's status route.
+`status` exposes routing/runtime summaries; its redacted account summaries are not
+a quota snapshot. Use `accounts` for exact credential IDs, quota windows, and
+observation timestamps. Do not join accounts by redacted display names.
 
 ### Disable
 
@@ -282,7 +316,7 @@ cd web && pnpm a11y                          # axe WCAG 2.1 AA audit of every pa
 python3 tests/docker_persistence.py <lib.so> # official Docker image persistence test
 ```
 
-- Build and test targets take `TARGET`: `linux_amd64` (default), `linux_arm64`, `darwin_amd64`, `darwin_arm64`, or `windows_amd64`. Linux and Windows builds run in a pinned Docker image; macOS builds need a macOS host. `CPA_VERSION` selects the CPA release the host tests download (default 8.0.27); checksums are verified.
+- Build and test targets take `TARGET`: `linux_amd64` (default), `linux_arm64`, `darwin_amd64`, `darwin_arm64`, or `windows_amd64`. Linux and Windows builds run in a pinned Docker image; macOS builds need a macOS host. `CPA_VERSION` selects the CPA release the host tests download (default 8.0.67); checksums are verified.
 - All integration tests use synthetic credentials and local TLS fixtures with networking disabled; they never contact real providers. `make demo` and the dashboard screenshots (`cd web && node scripts/screenshots.mjs`) use the same fixtures.
 - Design: [spec](docs/spec/quota-session-scheduler.md), [architecture](docs/architecture.md), [ADRs](docs/adr), [glossary](GLOSSARY.md).
 
@@ -290,7 +324,7 @@ python3 tests/docker_persistence.py <lib.so> # official Docker image persistence
 
 Stock Go on macOS amd64 keeps each thread's current goroutine in one fixed thread-local slot, slot 6, which every Go runtime in a process shares. CPA is itself a Go program, so a plugin built with stock Go crashes it at startup (`fatal error: addspecial on invalid pointer`). Linux, Windows, and Apple silicon give each runtime its own slot.
 
-The `darwin_amd64` library is built with Go 1.26.8 plus [`scripts/go-tls-slot.patch`](scripts/go-tls-slot.patch), which moves the plugin's runtime to slot 11 (also reserved by Apple, otherwise unused). The toolchain is built from checksum-verified upstream source, and the build fails if any goroutine access in the library still uses slot 6.
+The `darwin_amd64` library is built with Go 1.26.10 plus [`scripts/go-tls-slot.patch`](scripts/go-tls-slot.patch), which moves the plugin's runtime to slot 11 (also reserved by Apple, otherwise unused). The toolchain is built from checksum-verified upstream source, and the build fails if any goroutine access in the library still uses slot 6.
 
 ## Release
 

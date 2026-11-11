@@ -80,7 +80,8 @@ func TestSchemaCoversEveryScalarSetting(t *testing.T) {
 		}
 	}
 	for key, value := range Default().Public() {
-		if _, isMap := value.(map[string]any); isMap {
+		switch value.(type) {
+		case map[string]any, []map[string]any:
 			continue
 		}
 		if !names[key] {

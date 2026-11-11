@@ -4,7 +4,7 @@ Binary releases of kpatdev-quota-router statically link code from the projects b
 
 ## CLIProxyAPI plugin SDK
 
-- Module: `github.com/router-for-me/CLIProxyAPI/v8` v8.0.27 (packages `sdk/pluginabi`, `sdk/pluginapi`)
+- Module: `github.com/router-for-me/CLIProxyAPI/v8` v8.0.40 (packages `sdk/pluginabi`, `sdk/pluginapi`)
 - License: MIT
 
 ```text
@@ -138,7 +138,7 @@ limitations under the License.
 
 ## Go standard library and runtime
 
-- Toolchain: go1.26.8
+- Toolchain: go1.26.10
 - `darwin_amd64` builds apply `scripts/go-tls-slot.patch`, which moves the runtime's goroutine pointer from thread-local slot 6 to slot 11.
 - License: BSD-3-Clause
 

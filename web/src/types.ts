@@ -168,7 +168,7 @@ export interface SessionRow {
   applied: boolean;
   created_at: string;
   last_seen: string;
-  expires_at: string;
+  expires_at: string | null;
   requests: number;
   failovers: number;
   last_failover_at?: string;

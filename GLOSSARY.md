@@ -33,3 +33,11 @@
 **Shadow mode** — decisions are recorded but CPA chooses; used to compare proposed and actual routing.
 
 **Delegate** — return "not handled" so CPA's built-in scheduler chooses.
+
+**Role** — a client-visible task name owned by the plugin, with ordered model/effort targets and optional account/provider restrictions.
+
+**Role target** — one model/effort pairing in a role, attempted across eligible accounts before the next target.
+
+**Role failback** — selecting an earlier target again on a subsequent request after quota recovery or a successful cooldown probe. It never replaces an in-progress response.
+
+**Weekly reserve** — an opt-in Claude Max eligibility restriction that preserves reported weekly quota until the final reset horizon. It overrides affinity and priority; reporting delay and in-flight requests can overshoot the threshold.

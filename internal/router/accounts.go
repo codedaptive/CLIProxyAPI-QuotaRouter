@@ -243,7 +243,13 @@ func (r *Router) ApplyPoll(authID string, snap quota.Snapshot, plan string, err 
 				a.Health.PollAuthRejected = true
 			}
 		}
-		a.NextPoll = now.Add(max(r.jittered(min(delay, pollBackoffMax)), retryAfter))
+		// A quota-endpoint 429 must reduce request pressure, not retry faster
+		// than the normal polling cadence when Retry-After is omitted.
+		floor := retryAfter
+		if a.PollError == "quota_http_429" {
+			floor = max(floor, r.cfg.PollInterval)
+		}
+		a.NextPoll = now.Add(max(r.jittered(min(delay, pollBackoffMax)), floor))
 		return
 	}
 	if a.Snapshot.Identity != "" && snap.Identity != "" && a.Snapshot.Identity != snap.Identity {
@@ -329,12 +335,24 @@ func (r *Router) RequestRefresh(authID string) (int, time.Duration) {
 	}
 	r.manualAt[key] = now
 	n := 0
+	var wait time.Duration
 	for _, a := range r.accounts {
 		if (authID == "" || a.ID == authID) && a.Present {
+			// Refresh buttons cannot bypass an upstream rate-limit cooldown.
+			if a.PollError == "quota_http_429" && now.Before(a.NextPoll) {
+				remaining := a.NextPoll.Sub(now)
+				if wait == 0 || remaining < wait {
+					wait = remaining
+				}
+				continue
+			}
 			a.NextPoll = now
 			a.ManualPoll = true
 			n++
 		}
+	}
+	if n == 0 {
+		return 0, wait
 	}
 	return n, 0
 }

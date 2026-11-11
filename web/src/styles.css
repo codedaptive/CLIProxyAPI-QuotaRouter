@@ -412,3 +412,12 @@ table.grid { width: 100%; border-collapse: collapse; }
   .search .input { width: 100%; }
   .search { order: 4; flex: 1 1 100%; }
 }
+
+.role-page { display:flex; flex-direction:column; gap:16px; padding-bottom:70px; }
+.role-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.role-fields label { display:flex; flex-direction:column; gap:6px; font-size:12px; }
+.role-fields .role-check { flex-direction:row; align-items:center; }
+.role-target { border-top:1px solid var(--border); padding:16px; }
+.role-target-head { display:flex; align-items:center; gap:6px; margin-bottom:12px; }
+.role-target details { margin-top:12px; }
+@media(max-width:700px) { .role-fields { grid-template-columns:1fr; } }
