@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PLUGIN = "kpatdev-quota-router"
 API = "/v0/management/plugins/" + PLUGIN
 MGMT, CLIENT = "persist-management-key", "persist-client-key"
-GO_IMAGE = "golang:1.26-bookworm@sha256:a688600ca24f8a4d3ca77f95b0dd40704a9fc787c826660eb7ba0b641b8b175d"
+GO_IMAGE = "golang:1.26.10-bookworm@sha256:5de7c99eb78ca5e515a4c340235d0955ec5964a5071c492c15503d7c267da473"
 ACCOUNTS = ["ca", "cb"]
 
 
@@ -34,7 +34,7 @@ def sh(*args, check=True):
 
 def main():
     library = Path(sys.argv[1]).resolve()
-    image = sys.argv[2] if len(sys.argv) > 2 else "eceasy/cli-proxy-api:v8.0.27"
+    image = sys.argv[2] if len(sys.argv) > 2 else "eceasy/cli-proxy-api:v8.0.67"
     arch = "linux/arm64" if "arm64" in str(library) else "linux/amd64"
     tag = f"qrp{os.getpid()}"
     tmp = Path(tempfile.mkdtemp(prefix="qr-persist-"))

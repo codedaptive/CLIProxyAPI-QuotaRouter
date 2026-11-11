@@ -26,7 +26,7 @@ import urllib.request
 PLUGIN = "kpatdev-quota-router"
 API = "/v0/management/plugins/" + PLUGIN
 CLAUDE_MODEL = "claude-opus-4-6"
-CODEX_MODEL = "gpt-5.5"
+CODEX_MODEL = "gpt-6.1-sol"
 CLAUDE = ["ca", "cb", "cc"]
 CODEX = ["xa", "xb"]
 CLIENT_KEY = "synthetic-client-key"
@@ -363,6 +363,10 @@ plugins:
         try:
             host.start()
             host.wait(quota_ready, "startup and quota discovery")
+            if codex_supported:
+                host.wait(lambda: any(m["id"] == CODEX_MODEL for m in
+                          json.loads(host.request("/v1/models", key=CLIENT_KEY))["data"]),
+                          "Codex fixture model registration")
             ov = host.get("/overview")
             assert ov["plugin"]["version"] and ov["mode"] == "shadow", ov["plugin"]
 

@@ -23,8 +23,8 @@ TOOLCHAIN := $(TLS_GO)
 GO := GOTOOLCHAIN=local $(CURDIR)/$(TLS_GO)
 DARWIN_GO := $(GO)
 else
-GO := go
-DARWIN_GO := GOTOOLCHAIN=go$(GO_VERSION) go
+GO := GOTOOLCHAIN=go$(GO_VERSION) go
+DARWIN_GO := $(GO)
 endif
 # -buildvcs=false: output depends only on the sources, and git in the build container rejects the mounted checkout's owner.
 GO_BUILD := -trimpath -buildvcs=false -buildmode=c-shared -ldflags="-s -w"
