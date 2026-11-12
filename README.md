@@ -2,6 +2,9 @@
 
 # CLIProxyAPI QuotaRouter — Codedaptive
 
+A fork of [kpatdev/quota-router](https://github.com/kpatdev/quota-router), optimized for use with
+**[CodeTeam - CE](https://github.com/codedaptive/codeteam-ce)**.
+
 ### Put the right account and model behind each request.
 
 **Use quota before it resets. Keep desktop chats steady. Give agents stable roles.**
@@ -13,6 +16,9 @@
 [Start here](#start-here) · [Works with](#works-with) · [Documentation](#documentation) · [Issues](https://github.com/codedaptive/CLIProxyAPI-QuotaRouter/issues)
 
 </div>
+
+CodeTeam - CE is optional: this fork also works with other compatible clients and
+agent workflows.
 
 Multiple subscriptions only help if requests reach accounts that can serve them.
 A busy agent team also needs predictable model choices, while a desktop chat
@@ -53,7 +59,7 @@ updated independently:
 
 These Codedaptive projects complement the stack on the agent side:
 
-- **[CodeTeam CE](https://github.com/codedaptive/codeteam-ce)** runs a coordinated
+- **[CodeTeam - CE](https://github.com/codedaptive/codeteam-ce)** runs a coordinated
   team of coding agents. Its agents can use the proxy for model access and the
   router's role names for task-specific model preferences.
 - **[MOOTx01 CE](https://github.com/codedaptive/mootx01-ce)** gives agents persistent
