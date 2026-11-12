@@ -1,16 +1,15 @@
 # Create and use role routing configurations
 
-This guide is for a person or Factory AI generating task roles for MiniLLM's
-customized `kpatdev-quota-router` plugin. A role gives agents a stable model name
+This guide is for a person or coding-agent factory generating task roles for
+Codedaptive's `kpatdev-quota-router` plugin. A role gives agents a stable model name
 such as `designer`, backed by an ordered list of model and effort pairings.
 The proxy tries eligible accounts for the preferred model before trying the next
 model, and returns to the preferred model on later requests after recovery.
 
-This feature requires **MiniLLM plugin 1.1.0-minillm.2** and the tested
-**CLIProxyAPI 8.0.40** baseline. The packaged build is macOS Apple Silicon.
-At this handoff, the build has been tested but has **not been deployed to
-production**. Installing the native plugin and activating its scheduler are
-separate deployment tasks. These instructions configure roles after that setup.
+Role routing was introduced in **1.1.0-minillm.2**. For the current source version,
+supported build targets, and installation steps, start with the
+[Codedaptive README](../README.md) and [integration record](codedaptive-integration.md).
+Install the native plugin and activate its scheduler before configuring roles.
 
 ## Create a YAML file
 

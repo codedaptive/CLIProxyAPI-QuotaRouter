@@ -1,8 +1,8 @@
-# MiniLLM desktop routing
+# Codedaptive desktop routing
 
-Local revision `1.1.0-minillm.1`, based on kpatdev Quota Router v1.1.0.
-It is built separately from the running proxy. Building and testing this checkout
-does not activate it in production.
+Desktop routing was introduced in `1.1.0-minillm.1`, based on kpatdev Quota Router
+v1.1.0. See the [Codedaptive README](../README.md) for the current version and
+installation steps. Building the plugin does not activate it in a running proxy.
 
 ## Behavior
 
