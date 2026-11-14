@@ -126,6 +126,16 @@ func (r *Router) pickLegacy(req PickRequest, d Decision, order []*eval, now time
 			}
 		}
 	}
+	if len(d.reserveReleased) > 0 {
+		// Unusable higher-priority accounts must not prevent last-resort routing.
+		var ready []*eval
+		for _, e := range order {
+			if e.usable {
+				ready = append(ready, e)
+			}
+		}
+		order = ready
+	}
 	d.Ranked = r.legacyRank(order, now)
 	if len(d.Ranked) == 0 {
 		d.Outcome = OutcomeDelegated

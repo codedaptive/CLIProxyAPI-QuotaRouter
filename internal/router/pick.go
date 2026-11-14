@@ -69,6 +69,7 @@ type Skip struct {
 type Decision struct {
 	Reject           bool `json:"reject,omitempty"`
 	reserveGuard     bool
+	reserveReleased  map[string]bool
 	ID               uint64    `json:"id"`
 	At               time.Time `json:"at"`
 	Provider         string    `json:"provider"`
@@ -119,18 +120,23 @@ func (r *Router) Pick(req PickRequest) Decision {
 	now := r.now()
 	provider := normalizeProvider(req.Provider)
 	d := Decision{At: now, Provider: provider, Model: req.Model, Stream: req.Stream, Mode: r.cfg.Mode, Policy: r.cfg.Strategy}
-	for _, c := range req.Candidates {
-		if reason := r.weeklyReserveCause(c.ID, c.Provider, now); reason != "" {
+	order, released := r.evaluatePool(req.Candidates, req.Model, now)
+	d.reserveReleased = released
+	for _, e := range order {
+		if r.weeklyReserveCause(e.c.ID, e.c.Provider, now) != "" && !released[e.c.ID] {
 			d.reserveGuard = true
-			d.Skipped = append(d.Skipped, Skip{AuthID: c.ID, Reason: reason})
+		}
+		if reason := e.cause; strings.HasPrefix(reason, "weekly_reserve_") {
+			d.reserveGuard = true
+			d.Skipped = append(d.Skipped, Skip{AuthID: e.c.ID, Reason: reason})
 		}
 	}
 
 	if !supportedProvider(provider) {
 		r.counters.Unrelated++
 		d.Outcome, d.Cause = OutcomeDelegated, "provider_not_supported"
-		if d.reserveGuard {
-			return r.pickReserveFallback(req, d, now)
+		if d.reserveGuard || len(released) > 0 {
+			return r.pickReserveFallback(req, d, order)
 		}
 		return d
 	}
@@ -138,8 +144,8 @@ func (r *Router) Pick(req PickRequest) Decision {
 		if normalizeProvider(c.Provider) != provider {
 			r.counters.Unrelated++
 			d.Outcome, d.Cause = OutcomeDelegated, "mixed_provider_candidates"
-			if d.reserveGuard {
-				return r.pickReserveFallback(req, d, now)
+			if d.reserveGuard || len(released) > 0 {
+				return r.pickReserveFallback(req, d, order)
 			}
 			return d
 		}
@@ -156,15 +162,9 @@ func (r *Router) Pick(req PickRequest) Decision {
 	}
 	evals := make(map[string]*eval, len(req.Candidates))
 	offered := make(map[string]bool, len(req.Candidates))
-	var order []*eval
-	for _, c := range req.Candidates {
-		if c.ID == "" {
-			continue
-		}
-		offered[c.ID] = true
-		e := r.evaluate(c, req.Model, now)
-		evals[c.ID] = e
-		order = append(order, e)
+	for _, e := range order {
+		offered[e.c.ID] = true
+		evals[e.c.ID] = e
 	}
 	if r.cfg.ClientRouting.Enabled && !r.desktop(req.Session) {
 		return r.pickLegacy(req, d, order, now)
@@ -303,6 +303,10 @@ func (r *Router) Pick(req PickRequest) Decision {
 }
 
 func (r *Router) finish(d Decision) Decision {
+	if d.AuthID != "" && d.reserveReleased[d.AuthID] {
+		d.Cause = "weekly_reserve_last_available"
+		d.Fallback = true
+	}
 	if d.AuthID == "" && d.reserveGuard {
 		d.Outcome, d.Cause, d.Reject = "reserve_protected", "weekly_reserve_no_eligible_account", true
 	}
@@ -355,11 +359,18 @@ func (r *Router) choose(order []*eval, ranked []Ranked, exclude string) (string,
 }
 
 func (r *Router) evaluate(c Candidate, model string, now time.Time) *eval {
+	return r.evaluateReserve(c, model, now, false)
+}
+
+func (r *Router) evaluateReserve(c Candidate, model string, now time.Time, release bool) *eval {
 	e := &eval{c: c, offered: true, plugin: r.cfg.AccountPriority[c.ID]}
 	a := r.accounts[c.ID]
 	block := func(cause string, permanent bool) *eval {
 		e.cause, e.permanent = cause, permanent
 		return e
+	}
+	if release && a != nil && (!a.Present || a.Health.PollAuthRejected || (a.Unavailable && a.CooldownUntil.After(now))) {
+		return block("reserve_account_unavailable", false)
 	}
 	if strings.EqualFold(c.Status, "disabled") || (a != nil && a.Disabled) {
 		return block("disabled", true)
@@ -367,7 +378,7 @@ func (r *Router) evaluate(c Candidate, model string, now time.Time) *eval {
 	if a != nil && !a.Health.AuthFailedAt.IsZero() {
 		return block(fmt.Sprintf("auth_failed_%d", a.Health.AuthFailStatus), true)
 	}
-	if cause := r.weeklyReserveCause(c.ID, c.Provider, now); cause != "" {
+	if cause := r.weeklyReserveCause(c.ID, c.Provider, now); cause != "" && !(release && cause == "weekly_reserve_protected") {
 		return block(cause, false)
 	}
 	if a == nil || !a.HasSnapshot {

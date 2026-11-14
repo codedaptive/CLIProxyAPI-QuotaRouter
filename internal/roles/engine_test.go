@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/kpatdev/quota-router/internal/config"
+	"github.com/kpatdev/quota-router/internal/quota"
+	"github.com/kpatdev/quota-router/internal/router"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
@@ -292,5 +294,57 @@ func TestRoleSessionNamespaceIsStableAndSeparate(t *testing.T) {
 	}
 	if !IsRoleSession("claude:" + a.Get("X-Claude-Code-Session-Id")) {
 		t.Fatal("usage would leak into desktop affinity")
+	}
+}
+
+// Reserve decisions use the target's permitted model/account pool, not unrelated
+// quota elsewhere in the roster. Real router state exercises both eligibility paths.
+func TestRoleReserveFallbackAndRecovery(t *testing.T) {
+	e, h, now := setup(t)
+	cfg := config.Default()
+	cfg.Mode = config.ModeActive
+	cfg.MaxWeeklyReserve.Enabled = true
+	cfg.ClientRouting.AccountPlans = map[string]string{"A": "ultra"}
+	r := router.New(cfg, func() time.Time { return *now })
+	r.SyncRoster([]router.RosterEntry{{ID: "A", Provider: "claude"}})
+	reset := now.Add(48 * time.Hour)
+	r.ApplyPoll("A", quota.Snapshot{Provider: "claude", PolledAt: *now, Windows: []quota.Window{{Kind: quota.Weekly, UsedPercent: 95, ResetsAt: &reset, ObservedAt: *now}}}, "", nil)
+	e.Eligibility = r
+	h.files[0].Priority = 1000
+	if _, err := e.Execute(request()); err != nil {
+		t.Fatal(err)
+	}
+	if got := callIDs(h); !reflect.DeepEqual(got, []string{"B"}) {
+		t.Fatalf("reserve before ordinary model account: %v", got)
+	}
+	h.failures["B"] = 429
+	if _, err := e.Execute(request()); err != nil {
+		t.Fatal(err)
+	}
+	if got := callIDs(h); !reflect.DeepEqual(got, []string{"B", "B", "A"}) {
+		t.Fatalf("missing last resort: %v", got)
+	}
+	*now = now.Add(31 * time.Second)
+	delete(h.failures, "B")
+	if _, err := e.Execute(request()); err != nil {
+		t.Fatal(err)
+	}
+	if got := callIDs(h); got[len(got)-1] != "B" {
+		t.Fatalf("reserve not protected after recovery: %v", got)
+	}
+	e.Configure([]config.Role{{Name: "designer", Enabled: true, Targets: []config.RoleTarget{{Model: "opus", Effort: "high", AccountIDs: []string{"A"}}}}}, true)
+	if _, err := e.Execute(request()); err != nil {
+		t.Fatal(err)
+	}
+	if got := callIDs(h); got[len(got)-1] != "A" {
+		t.Fatalf("unpermitted account blocked fallback: %v", got)
+	}
+	pick, handled := e.CountPick(pluginapi.SchedulerPickRequest{Model: "opus", Options: pluginapi.SchedulerOptions{Metadata: map[string]any{"request_path": "/v1/messages/count_tokens", "requested_model": "designer"}}, Candidates: []pluginapi.SchedulerAuthCandidate{{ID: "B", Provider: "antigravity"}, {ID: "A", Provider: "claude"}}})
+	if !handled || pick.Reject || pick.AuthID != "A" {
+		t.Fatalf("restricted count fallback: %+v", pick)
+	}
+	r.ApplyPoll("A", quota.Snapshot{Provider: "claude", PolledAt: *now, Windows: []quota.Window{{Kind: quota.Weekly, UsedPercent: 100, ResetsAt: &reset, ObservedAt: *now}}}, "", nil)
+	if _, err := e.Execute(request()); err == nil {
+		t.Fatal("role used exhausted reserve")
 	}
 }

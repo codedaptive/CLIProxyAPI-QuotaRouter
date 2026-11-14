@@ -48,10 +48,14 @@ func (e *Engine) CountPick(req pluginapi.SchedulerPickRequest) (pluginapi.Schedu
 		if t.Model != model {
 			continue
 		}
+		var models []pluginapi.HostAuthModels
+		roster := map[string]pluginapi.HostAuthFileEntry{}
 		for _, c := range req.Candidates {
-			if (len(t.Providers) == 0 || contains(t.Providers, c.Provider)) && (len(t.AccountIDs) == 0 || contains(t.AccountIDs, c.ID)) {
-				return pluginapi.SchedulerPickResponse{Handled: true, AuthID: c.ID}, true
-			}
+			models = append(models, pluginapi.HostAuthModels{ID: c.ID, Provider: c.Provider, Models: []string{model}})
+			roster[c.ID] = pluginapi.HostAuthFileEntry{ID: c.ID, Priority: c.Priority, Disabled: strings.EqualFold(c.Status, "disabled")}
+		}
+		if candidates := e.candidates(t, models, roster); len(candidates) > 0 {
+			return pluginapi.SchedulerPickResponse{Handled: true, AuthID: candidates[0].ID}, true
 		}
 	}
 	return pluginapi.SchedulerPickResponse{Handled: true, Reject: true, RejectReason: "No permitted account for role token counting"}, true

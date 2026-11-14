@@ -30,12 +30,12 @@ func TestMaxReserveThroughSchedulerRPC(t *testing.T) {
 		t.Fatalf("priority bypass: %+v", resp)
 	}
 	req.Candidates = req.Candidates[:1]
-	if resp := call(); !resp.Handled || !resp.Reject || resp.RejectCode != "weekly_reserve_protected" || resp.AuthID != "" {
-		t.Fatalf("must not delegate: %+v", resp)
+	if resp := call(); !resp.Handled || resp.Reject || resp.AuthID != "A" {
+		t.Fatalf("must use last available reserve: %+v", resp)
 	}
 	req.Options = pluginapi.SchedulerOptions{Headers: map[string][]string{"X-Claude-Code-Session-Id": {roles.SessionPrefix + "test"}}, Metadata: map[string]any{"pinned_auth_id": "A"}}
-	if resp := call(); !resp.Handled || !resp.Reject || resp.AuthID != "" {
-		t.Fatalf("role pin bypass: %+v", resp)
+	if resp := call(); !resp.Handled || resp.Reject || resp.AuthID != "A" {
+		t.Fatalf("last available role pin: %+v", resp)
 	}
 	req.Options = pluginapi.SchedulerOptions{}
 	// Live settings changes release the guard without restarting the router.

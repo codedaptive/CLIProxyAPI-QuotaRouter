@@ -40,4 +40,4 @@
 
 **Role failback** — selecting an earlier target again on a subsequent request after quota recovery or a successful cooldown probe. It never replaces an in-progress response.
 
-**Weekly reserve** — an opt-in Claude Max eligibility restriction that preserves reported weekly quota until the final reset horizon. It overrides affinity and priority; reporting delay and in-flight requests can overshoot the threshold.
+**Weekly reserve** — an opt-in Claude Max eligibility restriction that preserves reported weekly quota until the final reset horizon, or until no other eligible account can serve the requested model. It overrides affinity and priority; reporting delay and in-flight requests can overshoot the threshold.

@@ -64,12 +64,10 @@ func TestWeeklyReserveOverridesAffinityAndInheritedSession(t *testing.T) {
 		t.Fatalf("release: %+v", d)
 	}
 }
-func TestWeeklyReserveNeverDelegatesProtectedPoolOrHostPin(t *testing.T) {
+func TestWeeklyReserveRetainsProtectionWithAlternativeAndHostPin(t *testing.T) {
 	h := reserveHarness(t)
 	for _, req := range []PickRequest{
-		{Provider: "claude", Candidates: []Candidate{{ID: "max", Provider: "claude"}}},
 		{Provider: "claude", PinnedAuthID: "max", Candidates: []Candidate{{ID: "max", Provider: "claude"}, {ID: "team", Provider: "claude"}}},
-		{Provider: "mixed", Candidates: []Candidate{{ID: "max", Provider: "claude"}}},
 	} {
 		d := h.r.Pick(req)
 		if !d.Applied || !d.Reject || d.AuthID != "" {
@@ -81,7 +79,7 @@ func TestWeeklyReserveNeverDelegatesProtectedPoolOrHostPin(t *testing.T) {
 	}
 	h.r.cfg.Mode = config.ModeShadow
 	d := h.pick("claude", "opus", nil, "max")
-	if d.Applied || !d.Reject || h.r.ReserveBlocked("max", "claude") {
+	if d.Applied || d.Reject || d.AuthID != "max" || h.r.ReserveBlocked("max", "claude") {
 		t.Fatalf("shadow must not enforce: %+v", d)
 	}
 }
@@ -185,5 +183,109 @@ func TestUltraReserveFromPlanMetadataAndOverride(t *testing.T) {
 				t.Fatalf("plan=%s reserve not released", plan)
 			}
 		}
+	}
+}
+
+func TestWeeklyReserveLastAvailableAndAutomaticProtection(t *testing.T) {
+	for _, desktop := range []bool{false, true} {
+		t.Run(map[bool]string{false: "cli", true: "desktop"}[desktop], func(t *testing.T) {
+			h := desktopHarness(t, "claude")
+			h.r.cfg.MaxWeeklyReserve.Enabled = true
+			h.poll("large", weekly(95, 48*time.Hour))
+			h.poll("small", weekly(100, 96*time.Hour))
+			key := "cli-key"
+			if desktop {
+				key = desktopKey
+			}
+			req := policyRequest("claude", key, "chat")
+			req.Candidates[1].Priority = 100 // exhausted higher tier must not veto reserve
+			d := h.r.Pick(req)
+			if d.AuthID != "large" || d.Reject || d.Cause != "weekly_reserve_last_available" {
+				t.Fatalf("fallback: %+v", d)
+			}
+			h.poll("small", weekly(50, 96*time.Hour))
+			d = h.r.Pick(req)
+			if d.AuthID != "small" || d.Reject {
+				t.Fatalf("protection not restored: %+v", d)
+			}
+		})
+	}
+}
+
+func TestWeeklyReserveFallbackEligibility(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*harness)
+	}{
+		{"weekly exhausted", func(h *harness) { h.poll("team", weekly(100, 96*time.Hour)) }},
+		{"five hour exhausted", func(h *harness) { h.poll("team", weekly(20, 96*time.Hour), fiveHour(100, time.Hour)) }},
+		{"model exhausted", func(h *harness) {
+			h.poll("team", weekly(20, 96*time.Hour), win{quota.ModelWeekly, "opus", 100, 48 * time.Hour})
+		}},
+		{"disabled", func(h *harness) { h.r.accounts["team"].Disabled = true }},
+		{"rate limited", func(h *harness) { h.r.accounts["team"].Health.RateLimitedUntil = h.now.Add(time.Hour) }},
+		{"model unavailable", func(h *harness) { h.r.blockModel(h.r.accounts["team"], "opus", h.now.Add(time.Hour)) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := reserveHarness(t)
+			tc.change(h)
+			d := h.pick("claude", "opus", nil, "max", "team")
+			if d.AuthID != "max" || d.Reject || d.Cause != "weekly_reserve_last_available" {
+				t.Fatalf("%+v", d)
+			}
+		})
+	}
+	for _, provider := range []string{"claude", "mixed"} {
+		h := reserveHarness(t)
+		d := h.r.Pick(PickRequest{Provider: provider, Model: "opus", Candidates: []Candidate{{ID: "max", Provider: "claude"}}})
+		if d.AuthID != "max" || d.Reject {
+			t.Fatalf("single %s: %+v", provider, d)
+		}
+	}
+}
+
+func TestWeeklyReserveDoesNotReleaseUnusableReserve(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*harness)
+	}{
+		{"zero weekly", func(h *harness) { h.poll("max", weekly(100, 48*time.Hour)) }},
+		{"zero five hour", func(h *harness) { h.poll("max", weekly(95, 48*time.Hour), fiveHour(100, time.Hour)) }},
+		{"zero model", func(h *harness) {
+			h.poll("max", weekly(95, 48*time.Hour), win{quota.ModelWeekly, "opus", 100, 48 * time.Hour})
+		}},
+		{"rate limited", func(h *harness) { h.r.accounts["max"].Health.RateLimitedUntil = h.now.Add(time.Hour) }},
+		{"disabled", func(h *harness) { h.r.accounts["max"].Disabled = true }},
+		{"removed", func(h *harness) { h.r.accounts["max"].Present = false }},
+		{"host cooldown", func(h *harness) {
+			h.r.accounts["max"].Unavailable = true
+			h.r.accounts["max"].CooldownUntil = h.now.Add(time.Hour)
+		}},
+		{"rejected quota auth", func(h *harness) { h.r.accounts["max"].Health.PollAuthRejected = true }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := reserveHarness(t)
+			tc.change(h)
+			d := h.pick("claude", "opus", nil, "max")
+			if d.AuthID != "" {
+				t.Fatalf("unusable reserve selected: %+v", d)
+			}
+			if h.r.RoleReserveEligible("max", "claude", "opus") {
+				t.Fatal("role allowed unusable reserve")
+			}
+		})
+	}
+}
+
+func TestWeeklyReserveAlternativesRemainPreferred(t *testing.T) {
+	h := reserveHarness(t)
+	h.r.cfg.NewSessionMinRemaining = 5
+	h.poll("team", weekly(99, 96*time.Hour))
+	if d := h.pick("claude", "opus", nil, "max", "team"); d.AuthID != "team" {
+		t.Fatalf("low headroom alternative: %+v", d)
+	}
+	h.r.accounts["team"].HasSnapshot = false
+	if d := h.pick("claude", "opus", nil, "max", "team"); d.AuthID == "max" {
+		t.Fatalf("unknown alternative not tried: %+v", d)
 	}
 }

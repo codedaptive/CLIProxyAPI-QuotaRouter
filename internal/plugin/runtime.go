@@ -25,7 +25,7 @@ import (
 )
 
 // Version is the plugin release version.
-const Version = "1.1.0-minillm.5"
+const Version = "1.1.0-minillm.6"
 
 const (
 	rosterEvery    = 30 * time.Second
@@ -550,16 +550,17 @@ func (p *Runtime) Pick(req pluginapi.SchedulerPickRequest) pluginapi.SchedulerPi
 	// Filter role callbacks too: they execute before the ordinary scheduler.
 	originalReq := req
 	if r != nil {
+		allowed := r.ReserveAllowed(toPickRequest(req))
 		candidates := make([]pluginapi.SchedulerAuthCandidate, 0, len(req.Candidates))
 		for _, c := range req.Candidates {
-			if !r.ReserveBlocked(c.ID, c.Provider) {
+			if allowed[c.ID] {
 				candidates = append(candidates, c)
 			}
 		}
 		req.Candidates = candidates
 	}
 	if roleEngine != nil && !p.quiesced.Load() {
-		if picked, handled := roleEngine.CountPick(req); handled {
+		if picked, handled := roleEngine.CountPick(originalReq); handled {
 			return picked
 		}
 	}

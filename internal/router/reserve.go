@@ -42,8 +42,8 @@ func (r *Router) weeklyReserveCause(id, provider string, now time.Time) string {
 	return ""
 }
 
-// ReserveBlocked is also checked at the role executor's exact-account pin,
-// closing the gap between initial role selection and the later host callback.
+// ReserveBlocked reports strict protection without a request candidate pool.
+// Execution uses ReserveAllowed to apply the last-available exception.
 func (r *Router) ReserveBlocked(id, provider string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -52,11 +52,11 @@ func (r *Router) ReserveBlocked(id, provider string) bool {
 
 // The ABI cannot delegate a filtered mixed-provider pool. When protection is
 // needed, choose a safe host-offered candidate deterministically instead.
-func (r *Router) pickReserveFallback(req PickRequest, d Decision, now time.Time) Decision {
+func (r *Router) pickReserveFallback(req PickRequest, d Decision, order []*eval) Decision {
 	var usable []Candidate
-	for _, c := range req.Candidates {
-		if r.evaluate(c, req.Model, now).usable {
-			usable = append(usable, c)
+	for _, e := range order {
+		if e.usable {
+			usable = append(usable, e.c)
 		}
 	}
 	sort.Slice(usable, func(i, j int) bool {
@@ -73,4 +73,50 @@ func (r *Router) pickReserveFallback(req PickRequest, d Decision, now time.Time)
 		return r.finish(d)
 	}
 	return r.finish(d)
+}
+
+// evaluatePool releases only the percentage reserve, and only when no ordinary
+// host-offered candidate is usable for this model. Unknown quota on another
+// account still gets its normal opportunity; missing/stale reserve evidence never
+// becomes permission to spend. Runs under r.mu; policy is local to this request.
+func (r *Router) evaluatePool(candidates []Candidate, model string, now time.Time) ([]*eval, map[string]bool) {
+	var order []*eval
+	hasAlternative := false
+	for _, c := range candidates {
+		if c.ID == "" {
+			continue
+		}
+		e := r.evaluate(c, model, now)
+		order = append(order, e)
+		hasAlternative = hasAlternative || e.usable
+	}
+	released := map[string]bool{}
+	if hasAlternative {
+		return order, released
+	}
+	for i, e := range order {
+		if e.cause != "weekly_reserve_protected" {
+			continue
+		}
+		fallback := r.evaluateReserve(e.c, model, now, true)
+		if fallback.usable && fallback.assessment.State == quota.Ready {
+			order[i] = fallback
+			released[e.c.ID] = true
+		}
+	}
+	return order, released
+}
+
+// ReserveAllowed evaluates the same candidate pool for role callbacks as
+// ordinary picks. The host has already filtered this pool for model/access scope.
+func (r *Router) ReserveAllowed(req PickRequest) map[string]bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := map[string]bool{}
+	order, released := r.evaluatePool(req.Candidates, req.Model, r.now())
+	for _, e := range order {
+		out[e.c.ID] = r.cfg.Mode != config.ModeActive ||
+			r.weeklyReserveCause(e.c.ID, e.c.Provider, r.now()) == "" || released[e.c.ID]
+	}
+	return out
 }

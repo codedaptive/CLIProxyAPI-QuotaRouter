@@ -24,6 +24,12 @@ type Host interface {
 type Eligibility interface {
 	RoleEligible(string, string, string) bool
 }
+
+// ReserveEligibility adds last-resort accounts without changing normal role
+// eligibility. They remain behind every ordinary account for the same target.
+type ReserveEligibility interface {
+	RoleReserveEligible(string, string, string) bool
+}
 type Request struct {
 	pluginapi.ExecutorRequest
 	StreamID       string `json:"stream_id"`
@@ -156,6 +162,7 @@ func contains(ss []string, s string) bool {
 type candidate struct {
 	ID, Provider string
 	Priority     int
+	Reserved     bool
 }
 
 func (e *Engine) catalog() ([]pluginapi.HostAuthModels, map[string]pluginapi.HostAuthFileEntry, error) {
@@ -185,12 +192,20 @@ func (e *Engine) candidates(t config.RoleTarget, models []pluginapi.HostAuthMode
 		if f.Disabled || (f.Unavailable && f.NextRetryAfter.After(e.now())) {
 			continue
 		}
+		reserved := false
 		if e.Eligibility != nil && !e.Eligibility.RoleEligible(m.ID, m.Provider, t.Model) {
-			continue
+			fallback, ok := e.Eligibility.(ReserveEligibility)
+			if !ok || !fallback.RoleReserveEligible(m.ID, m.Provider, t.Model) {
+				continue
+			}
+			reserved = true
 		}
-		out = append(out, candidate{m.ID, m.Provider, f.Priority})
+		out = append(out, candidate{ID: m.ID, Provider: m.Provider, Priority: f.Priority, Reserved: reserved})
 	}
 	sort.Slice(out, func(i, j int) bool {
+		if out[i].Reserved != out[j].Reserved {
+			return !out[i].Reserved
+		}
 		if out[i].Priority != out[j].Priority {
 			return out[i].Priority > out[j].Priority
 		}
@@ -361,6 +376,9 @@ func (e *Engine) Execute(req Request) (any, error) {
 				d.Reason = "preferred target"
 				if i > 0 {
 					d.Reason = "earlier targets unavailable"
+				}
+				if c.Reserved {
+					d.Reason = "weekly_reserve_last_available"
 				}
 				e.record(d)
 				return result, nil

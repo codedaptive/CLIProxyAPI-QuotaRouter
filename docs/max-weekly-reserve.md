@@ -29,14 +29,27 @@ credential before enabling the reserve. Unknown plans are not guessed to be Max.
 Codex, Claude Pro/Team and API-key accounts are unaffected unless incorrectly
 marked as a Claude Max account.
 
-At **10% or less weekly quota remaining**, more than 24 hours before reset, that
-account is unavailable to the scheduler. Another eligible account is chosen using
-normal routing. Credential priority, desktop plan preference, session affinity,
-parent-session inheritance, and role execution cannot override the reserve.
-Exactly 24 hours before reset it is eligible again, subject to ordinary quota,
-health, model support and new-session headroom rules. Five-hour and model-specific
-windows never determine this reserve. Actual exhaustion still blocks an account
-inside the final 24 hours.
+At **10% or less weekly quota remaining**, more than 24 hours before reset, the
+account is reserved while another host-offered account can serve the requested
+model. Normal routing tries those alternatives first. If none is usable, the
+scheduler releases the percentage reserve for that request and selects a usable
+reserved account. Protection returns automatically when an alternative recovers;
+the setting is never toggled off globally.
+
+This last-resort behavior starts in `1.1.0-minillm.6`. It applies to ordinary CLI,
+desktop, inherited, mixed-provider, and pinned requests. A pin does not bypass a
+usable alternative, and the plugin does not silently replace a pinned account.
+Role routing tries ordinary permitted accounts for each target before reserved
+accounts for that same model, then proceeds to the next model target if necessary.
+Role filters and failure cooldowns remain in force; token counting uses the same
+preference order. Quota on an account that cannot serve the requested model does
+not prevent fallback.
+
+Only the percentage floor is released. Actual weekly, five-hour, or model-specific
+exhaustion, disabled/removed credentials, authentication failures, cooldowns, and
+missing/stale reserve evidence still prevent last-resort use. An ordinary account
+with unknown quota retains its normal opportunity before the reserve is spent.
+Exactly 24 hours before reset, the time-based reserve release still applies.
 
 For an existing bound session, the reserve causes a temporary failover and keeps
 the binding. It may return to its original account after the reserve is released.
@@ -47,18 +60,15 @@ unconfirmed elapsed reset is protected until fresh evidence arrives. Freshness i
 checked on the weekly window itself, not another window's update. Passive quota
 headers and normal polling update the evidence; there are no inference probes.
 
-When no eligible account can be chosen, the active scheduler returns an explicit
-`weekly_reserve_protected` rejection. It does not delegate back to the host where
-affinity or fill-first could spend the reserve. A host-pinned protected account is
-rejected, not silently replaced. For mixed-provider pools containing a protected account, safe host-offered candidates
-are selected by priority then credential ID, since the host ABI cannot delegate a
-filtered pool. Without a protected candidate, normal mixed-provider delegation is
-unchanged.
-Role targets can fall forward through their normal eligibility checks. Shadow mode
-records the proposed protection but does not enforce it.
+When no eligible ordinary or reserved account can be chosen, the active scheduler
+returns an explicit `weekly_reserve_protected` rejection instead of delegating a
+protected pool back to the host. Shadow mode records the proposed behavior without
+enforcing it. Mixed-provider pools use priority then credential ID among usable
+choices; without reserve-related filtering normal mixed-provider delegation remains.
 
 The plugin's Activity/decision views show `weekly_reserve_protected`,
-`weekly_reserve_quota_unknown`, or `weekly_reserve_awaiting_reset`. Settings/export
+`weekly_reserve_quota_unknown`, or `weekly_reserve_awaiting_reset`. Last-resort
+selection is identified as `weekly_reserve_last_available`. Settings/export
 preserve `max_weekly_reserve` across unrelated edits. Configure this block through
 YAML or the plugin config API; no dedicated settings form has been added.
 

@@ -37,7 +37,7 @@ on [WebDevCaptain/quota-reset-router](https://github.com/WebDevCaptain/quota-res
 | **Quota scheduling** | Prefers accounts whose weekly/monthly quota resets soonest, with quota-pressure, balanced, and manual-priority policies also available. |
 | **Desktop policy** | Opt-in client-key scopes prefer configured plan tiers and keep each recognized conversation on its account until it needs to move. Other callers use the extension's CLI priority/reset-first policy. |
 | **Model/effort roles** | Publishes names such as `designer`, tries ordered model/effort targets across eligible accounts, falls back on availability failures, and tries the preferred target again after recovery. |
-| **Weekly reserve** | Opt-in protection stops selecting eligible Claude Ultra/Max accounts at the configured reported weekly balance until the final reset horizon. |
+| **Weekly reserve** | Opt-in protection stops selecting eligible Claude Ultra/Max accounts at the configured reported weekly balance until the final reset horizon, with last-resort access when no other account can serve the model. |
 | **Quota observations** | Reads provider quota endpoints and response headers, with cooldown handling for quota-read throttling. No inference calls are made just to measure quota. |
 | **Built-in dashboard** | Shows accounts, sessions, routing decisions, role attempts, usage, and settings. |
 
@@ -191,7 +191,7 @@ Fixtures use synthetic credentials; they do not require production accounts.
 ## Releases and updates
 
 The fork is based on **kpatdev v1.1.0**; its current custom source version is
-**`1.1.0-minillm.5`**. Upstream downloads do not contain the Codedaptive extensions.
+**`1.1.0-minillm.6`**. Upstream downloads do not contain the Codedaptive extensions.
 The [CI workflow](https://github.com/codedaptive/CLIProxyAPI-QuotaRouter/actions/workflows/ci.yml)
 builds and tests supported platform targets.
 

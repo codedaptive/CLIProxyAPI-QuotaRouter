@@ -23,3 +23,16 @@ covered.
 
 The boundary is based on observed quota; concurrency and reporting delay mean
 that no exact 10% floor can be promised. No inference request is sent to probe quota.
+
+## Amendment — November 14, 2026: last-resort reserve access
+
+The user changed the policy: preserve the reserve while another eligible account
+can serve the requested model, but allow it when no other usable quota remains.
+This supersedes the unconditional rejection above for fresh, usable reserved quota.
+Selection re-evaluates the host-offered pool on each request; there is no global
+reserve-disable state. Ordinary candidates remain ahead of reserved candidates,
+including within a role's model/account restrictions. Roles exhaust the ordinary
+accounts for a target before trying its reserved accounts, then the next target.
+Only the percentage floor is waived. Unknown/stale weekly evidence, exhaustion,
+health failures, disabled credentials, and host access restrictions still apply.
+Activity identifies the exception as `weekly_reserve_last_available`.
